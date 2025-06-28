@@ -35,7 +35,7 @@
         "bchaddrjs": "^0.5.2",
         "bignum": "^0.13.1",
         "bitcoinjs-lib": "^5.2.0",
-        "multi-hashing": "git+https://github.com/ROZ-MOFUMOFU-ME/node-multi-hashing#stable"
+        "multi-hashing": "git+https://github.com/ROZ-MOFUMOFU-ME/node-multi-hashing.git#stable"
     },
     "engines": {
         "node": ">=8.11"
