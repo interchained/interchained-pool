@@ -30,7 +30,7 @@
         "url": "https://github.com/devel0x/node-stratum-pool.git"
     },
     "dependencies": {
-        "multi-hashing": "https://github.com/ethgr0wth/node-multi-hashing-yespower.git",
+        "multi-hashing": "git://github.com/zone117x/node-multi-hashing.git",
         "bignum": "0.13.1",
         "base58-native": "*",
         "async": "*"
