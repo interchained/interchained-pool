@@ -31,6 +31,13 @@
  *     ITC_POOL_CONFIG=path/to/config.json node start.js
  *
  * Default config: config/interchained-mainnet.json
+ *
+ * Environment overrides: a repo-root .env file (copy .env.example) is
+ * loaded when present, and ITC_* variables layer over the JSON config.
+ * Precedence: environment > JSON config > built-in default. The full
+ * variable list and rules live in lib/envConfig.js and .env.example.
+ * Live payments require the explicit opt-in ITC_PAYMENTS_LIVE=1; no
+ * other env value can turn dry-run off.
  */
 
 var fs = require('fs');
@@ -42,6 +49,7 @@ var payoutsLedger = require('./lib/payouts/ledger.js');
 var payoutsAttach = require('./lib/payouts/attach.js');
 var paymentsModule = require('./lib/payouts/payments.js');
 var ethashPool = require('./lib/ethash/ethashPool.js');
+var envConfig = require('./lib/envConfig.js');
 
 /* Stratum ports from the shared tri-PoW contract. A config file may
    override them, but these are the defaults when it does not. */
@@ -53,12 +61,20 @@ var DEFAULT_STRATUM_PORTS = {
 
 var SUPPORTED_ALGOS = Object.keys(DEFAULT_STRATUM_PORTS);
 
-function loadConfig(configPath) {
+function loadConfig(configPath, env) {
+    /* .env first (real env outranks the file), so ITC_POOL_CONFIG may
+       itself come from the .env file. Env overrides then layer over
+       the JSON config: env > JSON > built-in default. */
+    envConfig.loadDotEnvFile(path.join(__dirname, '.env'), process.env);
+    var effectiveEnv = env || process.env;
     var resolved = configPath
         ? path.resolve(configPath)
-        : path.join(__dirname, 'config', 'interchained-mainnet.json');
+        : (effectiveEnv.ITC_POOL_CONFIG
+            ? path.resolve(effectiveEnv.ITC_POOL_CONFIG)
+            : path.join(__dirname, 'config', 'interchained-mainnet.json'));
     var raw = fs.readFileSync(resolved, 'utf8');
     var config = JSON.parse(raw);
+    envConfig.applyEnvOverrides(config, effectiveEnv);
     config.__path = resolved;
     return config;
 }
@@ -394,6 +410,7 @@ function main() {
 
     console.log('Interchained tri-PoW pool (solo / PROP / PPLNS)');
     console.log('config: ' + config.__path);
+    if (config.poolName) console.log('pool name: ' + config.poolName);
 
     if (!config.address && !config.poolAddress) {
         console.error('ERROR: no payout address in config - set "address" to your ITC address ' +
@@ -422,5 +439,6 @@ module.exports = {
     authorizeFn: authorizeFn,
     createPools: createPools,
     setupPayments: setupPayments,
+    envConfig: envConfig,
     DEFAULT_STRATUM_PORTS: DEFAULT_STRATUM_PORTS
 };

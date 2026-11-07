@@ -3,7 +3,7 @@
  * Interchained tri-PoW solo pool - stats/API + dashboard static server.
  *
  * Zero dependencies: Node.js builtins only (http, fs, path, url).
- * Standalone:  node api/server.js        (PORT env override, default 8080)
+ * Standalone:  node api/server.js        (ITC_API_PORT, else PORT, else 8080)
  * In-process:  const { createServer, StatsCollector } = require('./server');
  *              const collector = new StatsCollector();
  *              collector.attach(poolInstance, 'sha256'); // per algo
@@ -16,6 +16,8 @@ const path = require('path');
 const { URL } = require('url');
 
 const StatsCollector = require('./collector');
+const payoutsBreakdown = require('../lib/payouts/breakdown');
+const payoutsReconcile = require('../lib/payouts/reconcile');
 
 const ALGOS = ['sha256', 'yespower', 'ethash'];
 const STRATUM_PORTS = { sha256: 3333, yespower: 3334, ethash: 3335 };
@@ -385,6 +387,51 @@ function createServer(options) {
       sendJson(res, 200, storeBlocksPayload(readStore(), limit ? Number(limit) : undefined));
       return;
     }
+    // ------------------------------------------------------ phase 3 fairness API
+    // Read-only audit surface (see docs/FAIRNESS.md). The options handed
+    // to the breakdown/recompute modules come from the SAME pool config
+    // the payouts processor runs with, so a recompute here is directly
+    // comparable to a miner's offline run of scripts/verify-payout.js.
+    const fairnessOptions = () => {
+      const payments = paymentsSummary(poolConfig);
+      const schemes = {};
+      for (const algo of ALGOS) {
+        const entry = algoConfig(poolConfig, algo);
+        schemes[algo] = { scheme: entry.scheme, pplnsWindow: entry.pplnsWindow };
+      }
+      return {
+        feePercent: payments.feePercent != null ? payments.feePercent : undefined,
+        minPayoutSat: payments.minPayoutSat != null ? payments.minPayoutSat : undefined,
+        schemes,
+      };
+    };
+    if (pathname === '/api/reconcile') {
+      sendJson(res, 200, payoutsReconcile.reconcile(readStore()));
+      return;
+    }
+    if (pathname === '/api/breakdowns') {
+      const limit = parsed.searchParams.get('limit');
+      const all = payoutsBreakdown.listBreakdowns(readStore(), fairnessOptions());
+      const n = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Number(limit) : 100;
+      sendJson(res, 200, all.slice(0, n));
+      return;
+    }
+    const blockRoute = pathname.match(/^\/api\/blocks\/(\d+)\/(breakdown|ledger)$/);
+    if (blockRoute) {
+      const height = Number(blockRoute[1]);
+      const algoParam = (parsed.searchParams.get('algo') || '').toLowerCase() || undefined;
+      const opts = Object.assign(fairnessOptions(), { algo: algoParam });
+      const store = readStore();
+      const payload = blockRoute[2] === 'breakdown'
+        ? payoutsBreakdown.breakdownForHeight(store, height, opts)
+        : payoutsBreakdown.ledgerExport(store, height, opts);
+      if (!payload) {
+        sendJson(res, 404, { error: 'block not found' });
+        return;
+      }
+      sendJson(res, 200, payload);
+      return;
+    }
     if (pathname.startsWith('/api/miner/')) {
       let address = '';
       try {
@@ -470,7 +517,9 @@ function serveStatic(req, res, uiDir, pathname) {
 module.exports = { createServer, StatsCollector };
 
 if (require.main === module) {
-  const port = Number(process.env.PORT) || DEFAULT_PORT;
+  // ITC_API_PORT (the phase-3 env layer, see lib/envConfig.js) wins;
+  // PORT remains as the legacy standalone override.
+  const port = Number(process.env.ITC_API_PORT) || Number(process.env.PORT) || DEFAULT_PORT;
   const collector = new StatsCollector();
   const server = createServer({ collector });
   server.listen(port, () => {

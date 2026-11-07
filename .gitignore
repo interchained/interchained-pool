@@ -1,1 +1,5 @@
 node_modules/
+
+# A filled-in .env carries daemon RPC credentials. Never commit it.
+# (.env.example is the template and IS committed.)
+.env

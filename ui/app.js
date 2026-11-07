@@ -538,6 +538,118 @@ function renderConfig(config) {
   renderPayouts(null);
 }
 
+/* ---------- rendering: fairness (phase 3) ---------- */
+
+function formatSatCoins(sat) {
+  return formatItcFromSat(sat) + ' (' + formatCount(sat) + ' sat)';
+}
+
+function renderReconcile(rec) {
+  var summary = document.getElementById('reconcile-summary');
+  var equation = document.getElementById('reconcile-equation');
+  var list = document.getElementById('reconcile-discrepancies');
+  if (!summary || !rec || typeof rec !== 'object') return;
+  var agg = rec.aggregate || {};
+  var errors = (rec.discrepancies || []).filter(function (d) { return d.severity !== 'notice'; });
+  summary.textContent = rec.balanced
+    ? 'Reconciliation: BALANCED across ' + formatCount(rec.settledBlocks) + ' settled block(s).'
+    : 'Reconciliation: ' + errors.length + ' discrepancy(ies) — the books do NOT balance; see below.';
+  summary.className = rec.balanced ? 'reconcile-ok' : 'reconcile-bad';
+  if (equation) {
+    equation.hidden = false;
+    equation.textContent = 'Rewards in ' + formatSatCoins(agg.rewardInSat) +
+      ' = payouts ' + formatSatCoins(agg.payoutsSat) +
+      ' + fees ' + formatSatCoins(agg.feeSat) +
+      ' + carry-over ' + formatSatCoins(agg.carryOverDeltaSat) +
+      (agg.undistributedSat ? ' + undistributed ' + formatSatCoins(agg.undistributedSat) : '');
+  }
+  if (list) {
+    while (list.firstChild) list.removeChild(list.firstChild);
+    (rec.discrepancies || []).forEach(function (d) {
+      list.appendChild(el('li', null, (d.kind || 'discrepancy') + ': ' + (d.message || '')));
+    });
+    list.hidden = !(rec.discrepancies || []).length;
+  }
+}
+
+function renderBreakdownList(listData) {
+  var select = document.getElementById('fairness-block-select');
+  var empty = document.getElementById('fairness-empty');
+  if (!select) return;
+  var items = (Array.isArray(listData) ? listData : []).filter(function (b) { return b && b.settled; });
+  var previous = select.value;
+  while (select.firstChild) select.removeChild(select.firstChild);
+  items.forEach(function (b) {
+    var opt = document.createElement('option');
+    opt.value = String(b.height) + '|' + String(b.algo || '');
+    opt.textContent = '#' + b.height + ' · ' + String(b.algo || '') + ' · ' + String(b.scheme || '') +
+      ' · ' + formatItcFromSat(b.rewardSat);
+    select.appendChild(opt);
+  });
+  if (previous && items.some(function (b) { return String(b.height) + '|' + String(b.algo || '') === previous; })) {
+    select.value = previous;
+  }
+  if (empty) empty.hidden = items.length > 0;
+  select.disabled = items.length === 0;
+}
+
+function renderBreakdown(bd) {
+  var result = document.getElementById('fairness-result');
+  var meta = document.getElementById('fairness-meta');
+  var win = document.getElementById('fairness-window');
+  var tbody = document.getElementById('fairness-body');
+  var totals = document.getElementById('fairness-totals');
+  var link = document.getElementById('fairness-ledger-link');
+  if (!result || !bd || typeof bd !== 'object') return;
+  result.hidden = false;
+  if (meta) {
+    meta.textContent = 'Block #' + bd.height + ' (' + String(bd.algo) + ', ' + String(bd.scheme).toUpperCase() +
+      ', ' + String(bd.status) + ') — reward ' + formatSatCoins(bd.rewardSat) +
+      ' · pool fee ' + String(bd.feePercent) + '% = ' + formatSatCoins(bd.feeSat) +
+      (bd.matchesRecorded === true ? ' · recompute matches the recorded split ✓'
+        : bd.matchesRecorded === false ? ' · RECOMPUTE DOES NOT MATCH THE RECORDED SPLIT ✗' : '');
+    meta.className = 'miner-totals' + (bd.matchesRecorded === false ? ' fairness-mismatch' : '');
+  }
+  if (win && bd.shareWindow) {
+    var w = bd.shareWindow;
+    win.textContent = 'Share window: ' + String(w.definition) +
+      ' · ' + formatCount(w.shareCount) + ' share(s)' +
+      (w.windowN ? ' (last ' + w.windowN + ')' : '') +
+      (w.prevBlockTime != null ? ' · round opens after t=' + w.prevBlockTime : '') +
+      ' · closes at block time t=' + String(w.toTime);
+  }
+  if (tbody) {
+    while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
+    (bd.miners || []).forEach(function (m) {
+      var row = document.createElement('tr');
+      row.appendChild(el('td', 'mono', m.address));
+      row.appendChild(el('td', null, formatCount(m.shareCount)));
+      row.appendChild(el('td', null, String(m.weight) + ' (' + String(m.weightPercent) + '%)'));
+      row.appendChild(el('td', null, formatSatCoins(m.payoutAmountSat)));
+      row.appendChild(el('td', null, formatSatCoins(m.paidOutSat)));
+      row.appendChild(el('td', null, formatSatCoins(m.carryOverCreatedSat)));
+      row.appendChild(el('td', null, formatSatCoins(m.carryOverConsumedSat)));
+      tbody.appendChild(row);
+    });
+  }
+  if (totals) {
+    totals.textContent = 'Totals: credited ' + formatSatCoins(bd.creditedSat) +
+      ' + fee ' + formatSatCoins(bd.feeSat) + ' = reward ' + formatSatCoins(bd.rewardSat) +
+      (bd.balanced ? ' ✓ balanced' : ' ✗ DOES NOT BALANCE');
+  }
+  if (link) link.href = '/api/blocks/' + bd.height + '/ledger?algo=' + encodeURIComponent(String(bd.algo || ''));
+}
+
+function loadBreakdown() {
+  var select = document.getElementById('fairness-block-select');
+  if (!select || !select.value) return;
+  var parts = select.value.split('|');
+  var url = '/api/blocks/' + encodeURIComponent(parts[0]) + '/breakdown?algo=' + encodeURIComponent(parts[1] || '');
+  fetchJson(url).then(function (bd) {
+    renderBreakdown(Array.isArray(bd) ? bd[0] : bd);
+  }).catch(function () { /* status banner covers API failures */ });
+}
+
 /* ---------- fetching / status ---------- */
 
 function fetchJson(path) {
@@ -572,7 +684,9 @@ function refresh() {
     fetchJson('/api/workers'),
     fetchJson('/api/config'),
     fetchJson('/api/payouts'),
-    fetchJson('/api/payouts/blocks')
+    fetchJson('/api/payouts/blocks'),
+    fetchJson('/api/breakdowns'),
+    fetchJson('/api/reconcile')
   ];
   return Promise.allSettled(endpoints).then(function (results) {
     var anyOk = results.some(function (r) { return r.status === 'fulfilled'; });
@@ -590,6 +704,8 @@ function refresh() {
       if (results[1].status === 'fulfilled') renderBlocks(results[1].value);
     }
     if (results[4] && results[4].status === 'fulfilled') renderPayouts(results[4].value);
+    if (results[6] && results[6].status === 'fulfilled') renderBreakdownList(results[6].value);
+    if (results[7] && results[7].status === 'fulfilled') renderReconcile(results[7].value);
     return allOk;
   }).catch(function () {
     // Promise.allSettled should not reject, but never let refresh crash the loop.
@@ -609,6 +725,11 @@ function init() {
       if (banner) banner.hidden = true;
     });
   }
+
+  var fairnessLoad = document.getElementById('fairness-load');
+  if (fairnessLoad) fairnessLoad.addEventListener('click', loadBreakdown);
+  var fairnessSelect = document.getElementById('fairness-block-select');
+  if (fairnessSelect) fairnessSelect.addEventListener('change', loadBreakdown);
 
   var minerForm = document.getElementById('miner-form');
   if (minerForm) {

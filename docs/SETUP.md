@@ -84,6 +84,22 @@ For regtest, copy the same walkthrough in the regtest file: daemon host/port mus
 
 > Never commit real RPC credentials. Keep production configs out of git or with secrets redacted, and restrict file permissions (`chmod 600`).
 
+### 3.1 Environment configuration (`.env`) - the recommended layer
+
+Instead of editing JSON, you can run the pool from an environment file. Copy the annotated example at the repo root, fill in at least the daemon credentials and the pool address, and start as usual:
+
+```bash
+cp .env.example .env
+# edit .env: ITC_DAEMON_USER, ITC_DAEMON_PASSWORD, ITC_POOL_ADDRESS
+node start.js
+```
+
+`start.js` loads `.env` automatically when it exists. Every operator-facing setting has a variable there, grouped by section (daemon, wallets, stratum, payouts, API, storage, tuning), each with its default and what breaks without it: daemon RPC host/port/user/password, the pool address and pool name, per-algorithm stratum ports, schemes and PPLNS windows, the fee, minimum payout and confirmation count, payments enabled and the ledger path, and the API port and host.
+
+Precedence: **environment > JSON config > built-in default**. A variable exported in your shell outranks the `.env` file. Unset or empty variables change nothing; invalid values stop startup with an error naming the variable. The JSON file still selects with `ITC_POOL_CONFIG` or the `start.js` argument, and stays the base layer, so a phase-1 or phase-2 JSON-only setup keeps working unchanged.
+
+One safety rule to know before §9: from the environment, dry-run turns off **only** with `ITC_PAYMENTS_LIVE=1`, that exact value. `ITC_PAYMENTS_LIVE=true`, `=yes`, and even `=false` do not enable live payments, and `ITC_PAYMENTS_DRY_RUN` can only force dry-run back on. Prove it any time with `node scripts/test-env-config.js`.
+
 ## 4. Starting the pool, API, and dashboard
 
 ```bash
@@ -283,7 +299,7 @@ The top-level `payments` object (see `config/README.md` for every field):
    - `curl http://localhost:8080/api/miner/<address>` — a miner's shares, pending balance, and payouts;
    - `curl http://localhost:8080/api/config` — confirm each algorithm's scheme and the payments summary (including dry-run) match your config;
    - the dashboard's pool payouts panel shows the same picture, with a **DRY-RUN** indicator while dry-run is on.
-4. Let at least one group-mode block mature in dry-run and verify the split by hand against the ledger: weights are share difficulties, the fee comes off first, and sub-`minPayout` amounts sit in pending balances rather than vanishing.
+4. Let at least one group-mode block mature in dry-run and verify the split by hand against the ledger: weights are share difficulties, the fee comes off first, and sub-`minPayout` amounts sit in pending balances rather than vanishing. The same check is available to your miners at any time: the per-block breakdown and reconciliation in the API, the downloadable ledger, and the standalone recount in `scripts/verify-payout.js` are documented in `docs/FAIRNESS.md`.
 
 ### 9.5 Go-live checklist
 
@@ -292,7 +308,7 @@ Only when the dry-run numbers are right:
 - [ ] `payments.enabled` is `true` and the schemes in `/api/config` match your intent per algorithm.
 - [ ] The daemon wallet controls the configured `address` and holds the matured rewards (`interchained-cli getbalance`); `payments.confirmations` is at or above coinbase maturity.
 - [ ] The ledger `api/data/payouts.json` is backed up, and a backup routine exists (§9.6).
-- [ ] Set **`"dryRun": false`** — this is the single switch that authorises the real PSBT signing stages and broadcast (`walletprocesspsbt` → `finalizepsbt` → `sendrawtransaction`) — and restart the pool.
+- [ ] Set **`"dryRun": false`** — this is the single switch that authorises the real PSBT signing stages and broadcast (`walletprocesspsbt` → `finalizepsbt` → `sendrawtransaction`) — and restart the pool. If you run from `.env`, the equivalent is `ITC_PAYMENTS_LIVE=1` (that exact value; see §3.1).
 - [ ] Watch the first real distribution: find its entry in `/api/payouts` / the ledger and confirm the recorded **txid** on the daemon (`interchained-cli gettransaction <txid>`), the recipient amounts, and that pending balances updated as expected.
 - [ ] Confirm the dashboard's DRY-RUN indicator is gone.
 
