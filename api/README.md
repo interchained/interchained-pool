@@ -122,3 +122,20 @@ that is **not yet listening**, with the collector attached as
 `server.collector`. Passing a `StatsCollector` directly as the argument
 also works. `api/collector.js` exports the `StatsCollector` class directly
 (also as `.StatsCollector`, with `.ALGOS`).
+
+## Phase 2 — group payouts surfacing
+
+`createServer({ payoutsFile, poolConfig })`; `payoutsFile` falls back to
+env `ITC_PAYOUTS_FILE`, then `api/data/payouts.json`. The payouts store
+(written by the payouts lane) is read fresh per request, read-only; a
+missing/corrupt file yields empty data, never an error.
+
+| Route | Response |
+|---|---|
+| `GET /api/miner/<address>` | `{ address, algos: { <algo>: { shares, shareDifficultySum, hashrateEstimate, lastShareAt, pendingSat, paidSat, pendingItc, paidItc } }, totals: {…same fields…} }`. Exact payout-address match on the store's `worker` field (never `workerName`). Hashrate source: **the payouts store** (works standalone), diff-1 convention over a 600 s window; `shareDifficultySum` covers all shares. `404 {error:"miner not found"}` when the address has no shares and no balances. |
+| `GET /api/payouts` | `{ payouts: […newest first, cap 100, enriched with totalSat/totalItc/minersPaid/feeSat/feeItc], pool: { feePercent, minPayout, minPayoutSat, minPayoutItc, dryRun, confirmations } }` |
+| `GET /api/payouts/blocks` | Store blocks, newest first, enriched with `rewardSat`/`rewardItc` and distribution `status`. |
+| `GET /api/blocks?source=store` | Same as `/api/payouts/blocks`. Default `/api/blocks` (no `source`) is unchanged collector behaviour. |
+| `GET /api/config` | Phase-1 fields preserved, plus per-algo `scheme`/`pplnsWindow`, a `payments` summary, flat `feePercent`/`minPayout`/`dryRun` mirrors, `poolAddress`, `poolConfigProvided`. Without `poolConfig`: schemes report `solo`, payments fields are `null` (unknown, not faked). `minPayout` is treated as satoshis, like every other money field in the store contract. `solo` is `true` exactly when every algo's scheme is `solo`. |
+
+Verify: `node api/test-phase2.js` (fixture + bare-boot assertions).

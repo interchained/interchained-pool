@@ -16,6 +16,9 @@ var REFRESH_MS = 10000;
 
 var state = {
   ports: { sha256: 3333, yespower: 3334, ethash: 3335 },
+  schemes: {},
+  payments: null,
+  blockStatus: {},
   startedAtMs: null,
   uptimeBaseSeconds: null,
   uptimeFetchedAtMs: null,
@@ -43,6 +46,16 @@ function formatHashrate(value) {
 
 function formatCount(value) {
   return String(Math.round(asNumber(value))).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+function formatItcFromSat(sat) {
+  var itc = asNumber(sat) / 1e8;
+  return itc.toFixed(8).replace(/\.?0+$/, '') + ' ITC';
+}
+
+function formatItcValue(itc) {
+  var n = asNumber(itc);
+  return n.toFixed(8).replace(/\.?0+$/, '') + ' ITC';
 }
 
 function toDate(value) {
@@ -233,27 +246,181 @@ function renderWorkers(workers) {
 /* ---------- rendering: blocks ---------- */
 
 function renderBlocks(blocks) {
-  var listEl = document.getElementById('blocks-list');
+  var tbody = document.getElementById('blocks-body');
   var empty = document.getElementById('blocks-empty');
-  if (!listEl) return;
   var list = Array.isArray(blocks) ? blocks : [];
-
-  while (listEl.firstChild) listEl.removeChild(listEl.firstChild);
+  if (tbody) {
+    while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
+    list.forEach(function (b) {
+      var item = (b && typeof b === 'object') ? b : {};
+      var key = String(item.algo || '').toLowerCase() + ':' + String(item.height);
+      var status = item.status || state.blockStatus[key] || null;
+      var row = document.createElement('tr');
+      row.appendChild(el('td', 'block-height', item.height !== null && item.height !== undefined ? '#' + formatCount(item.height) : '—'));
+      var algoCell = el('td');
+      algoCell.appendChild(badgeFor(item.algo));
+      row.appendChild(algoCell);
+      var hashCell = el('td', 'block-hash mono', truncateHash(item.hash));
+      if (item.hash) hashCell.title = String(item.hash);
+      row.appendChild(hashCell);
+      var timeCell = el('td', null, formatRelativeTime(item.time));
+      timeCell.title = formatDateTime(item.time);
+      row.appendChild(timeCell);
+      var statusCell = el('td');
+      if (status) {
+        statusCell.appendChild(el('span', 'status-pill dist-' + String(status).toLowerCase(), String(status)));
+      } else {
+        statusCell.textContent = '—';
+      }
+      row.appendChild(statusCell);
+      tbody.appendChild(row);
+    });
+  }
   if (empty) empty.hidden = list.length > 0;
+}
 
-  list.forEach(function (b) {
-    var item = (b && typeof b === 'object') ? b : {};
-    var row = el('li', 'block-row');
-    row.appendChild(el('span', 'block-height', item.height !== null && item.height !== undefined ? '#' + formatCount(item.height) : '—'));
-    row.appendChild(badgeFor(item.algo));
-    var hashSpan = el('span', 'block-hash mono', truncateHash(item.hash));
-    if (item.hash) hashSpan.title = String(item.hash);
-    row.appendChild(hashSpan);
-    var timeSpan = el('span', 'block-time', formatRelativeTime(item.time));
-    timeSpan.title = formatDateTime(item.time);
-    row.appendChild(timeSpan);
-    listEl.appendChild(row);
+function renderStoreBlocks(blocks) {
+  state.blockStatus = {};
+  (Array.isArray(blocks) ? blocks : []).forEach(function (b) {
+    if (!b || typeof b !== 'object') return;
+    state.blockStatus[String(b.algo || '').toLowerCase() + ':' + String(b.height)] = b.status || 'pending';
   });
+}
+
+/* ---------- rendering: payouts + miner lookup ---------- */
+
+function renderSchemeBadges() {
+  ALGOS.forEach(function (algo) {
+    var card = document.querySelector('[data-algo-card="' + algo + '"]');
+    if (!card) return;
+    var badge = field(card, 'scheme');
+    if (!badge) return;
+    var scheme = state.schemes[algo];
+    badge.textContent = scheme ? String(scheme).toUpperCase() : '—';
+    badge.className = 'badge badge-scheme' + (scheme ? ' scheme-' + String(scheme).toLowerCase() : '');
+  });
+}
+
+/* Payout batch status cell: dry-runs show their PSBT stage, live
+ * batches show the txid once sent (or the stage they are stuck at). */
+function payoutStatusText(item) {
+  if (item.dryRun) return item.stage ? 'dry-run · psbt ' + item.stage : 'dry-run';
+  if (item.txid) return truncateHash(item.txid);
+  if (item.stage) return 'psbt ' + item.stage;
+  return '—';
+}
+
+function renderPayouts(data) {
+  var pool = (data && typeof data === 'object' && data.pool && typeof data.pool === 'object')
+    ? data.pool : (state.payments || {});
+  var feeEl = document.getElementById('payouts-fee');
+  var minEl = document.getElementById('payouts-min');
+  var confEl = document.getElementById('payouts-confirmations');
+  var modeEl = document.getElementById('payouts-mode');
+  if (feeEl) feeEl.textContent = pool.feePercent !== null && pool.feePercent !== undefined ? String(pool.feePercent) + '%' : '—';
+  if (minEl) {
+    // Pool config denominates minPayout in ITC coins (see api/server.js
+    // paymentsSummary); prefer the explicit Itc/Sat pair when present.
+    if (pool.minPayoutItc !== null && pool.minPayoutItc !== undefined) {
+      minEl.textContent = String(pool.minPayoutItc) + ' ITC' +
+        (pool.minPayoutSat !== null && pool.minPayoutSat !== undefined
+          ? ' (' + formatCount(pool.minPayoutSat) + ' sat)' : '');
+    } else if (pool.minPayout !== null && pool.minPayout !== undefined) {
+      minEl.textContent = String(pool.minPayout) + ' ITC';
+    } else {
+      minEl.textContent = '—';
+    }
+  }
+  if (confEl) confEl.textContent = pool.confirmations !== null && pool.confirmations !== undefined ? formatCount(pool.confirmations) : '—';
+  if (modeEl) {
+    if (pool.dryRun === true) {
+      modeEl.textContent = 'DRY-RUN — no real payouts';
+      modeEl.className = 'badge badge-mode badge-dryrun';
+    } else if (pool.dryRun === false) {
+      modeEl.textContent = 'LIVE';
+      modeEl.className = 'badge badge-mode badge-live';
+    } else {
+      modeEl.textContent = 'Not configured';
+      modeEl.className = 'badge badge-mode';
+    }
+  }
+  var tbody = document.getElementById('payouts-body');
+  var empty = document.getElementById('payouts-empty');
+  if (!tbody) return;
+  var list = (data && Array.isArray(data.payouts)) ? data.payouts : [];
+  while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
+  if (empty) empty.hidden = list.length > 0;
+  list.slice(0, 20).forEach(function (batch) {
+    var item = (batch && typeof batch === 'object') ? batch : {};
+    var row = document.createElement('tr');
+    var timeCell = el('td', null, formatRelativeTime(item.time));
+    timeCell.title = formatDateTime(item.time);
+    row.appendChild(timeCell);
+    var algoCell = el('td');
+    algoCell.appendChild(badgeFor(item.algo));
+    row.appendChild(algoCell);
+    var totalSat = item.totalSat !== undefined ? item.totalSat
+      : Object.keys(item.amounts || {}).reduce(function (sum, k) { return sum + asNumber(item.amounts[k]); }, 0);
+    row.appendChild(el('td', null, formatItcFromSat(totalSat)));
+    var miners = item.minersPaid !== undefined ? item.minersPaid : Object.keys(item.amounts || {}).length;
+    row.appendChild(el('td', null, formatCount(miners)));
+    row.appendChild(el('td', 'mono', payoutStatusText(item)));
+    tbody.appendChild(row);
+  });
+}
+
+function renderMiner(data) {
+  var notFound = document.getElementById('miner-notfound');
+  var empty = document.getElementById('miner-empty');
+  var result = document.getElementById('miner-result');
+  var tbody = document.getElementById('miner-body');
+  var totals = document.getElementById('miner-totals');
+  if (notFound) notFound.hidden = true;
+  if (empty) empty.hidden = true;
+  if (result) result.hidden = false;
+  if (!tbody || !data) return;
+  while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
+  var algos = (data.algos && typeof data.algos === 'object') ? data.algos : {};
+  Object.keys(algos).forEach(function (algo) {
+    var a = algos[algo] || {};
+    if (!asNumber(a.shares) && !asNumber(a.pendingSat) && !asNumber(a.paidSat)) return;
+    var row = document.createElement('tr');
+    var algoCell = el('td');
+    algoCell.appendChild(badgeFor(algo));
+    row.appendChild(algoCell);
+    row.appendChild(el('td', null, formatCount(a.shares)));
+    row.appendChild(el('td', null, formatHashrate(a.hashrateEstimate)));
+    row.appendChild(el('td', null, a.lastShareAt ? formatRelativeTime(a.lastShareAt) : '—'));
+    row.appendChild(el('td', null, formatItcValue(a.pendingItc) + ' (' + formatCount(a.pendingSat) + ' sat)'));
+    row.appendChild(el('td', null, formatItcValue(a.paidItc) + ' (' + formatCount(a.paidSat) + ' sat)'));
+    tbody.appendChild(row);
+  });
+  if (totals && data.totals) {
+    totals.textContent = formatCount(data.totals.shares) + ' shares · ' +
+      formatHashrate(data.totals.hashrateEstimate) + ' · pending ' +
+      formatItcValue(data.totals.pendingItc) + ' · paid ' + formatItcValue(data.totals.paidItc);
+  }
+}
+
+function renderMinerNotFound() {
+  var notFound = document.getElementById('miner-notfound');
+  var empty = document.getElementById('miner-empty');
+  var result = document.getElementById('miner-result');
+  if (notFound) notFound.hidden = false;
+  if (empty) empty.hidden = true;
+  if (result) result.hidden = true;
+}
+
+function lookupMiner(address) {
+  if (!address) return;
+  fetch('/api/miner/' + encodeURIComponent(address), { headers: { Accept: 'application/json' }, cache: 'no-store' })
+    .then(function (res) {
+      if (res.status === 404) { renderMinerNotFound(); return null; }
+      if (!res.ok) throw new Error('miner lookup ' + res.status);
+      return res.json();
+    })
+    .then(function (data) { if (data) renderMiner(data); })
+    .catch(function () { renderMinerNotFound(); });
 }
 
 /* ---------- rendering: connection panel ---------- */
@@ -332,18 +499,43 @@ function renderConnection() {
 }
 
 function renderConfig(config) {
-  if (!config || typeof config !== 'object' || !Array.isArray(config.algos)) {
+  if (!config || typeof config !== 'object') {
     renderConnection();
+    renderSchemeBadges();
+    renderPayouts(null);
     return;
   }
-  config.algos.forEach(function (entry) {
+  // Accept every shape the API has used: algos as a map
+  // ({algo:{algo|name, stratumPort|port, scheme}}), algoList, or an
+  // algos array (phase-1 UI expectation).
+  var entries = [];
+  if (Array.isArray(config.algoList)) entries = entries.concat(config.algoList);
+  if (Array.isArray(config.algos)) entries = entries.concat(config.algos);
+  else if (config.algos && typeof config.algos === 'object') {
+    Object.keys(config.algos).forEach(function (key) {
+      var e = config.algos[key] || {};
+      entries.push(Object.assign({ algo: e.algo || e.name || key }, e));
+    });
+  }
+  if (config.stratumPorts && typeof config.stratumPorts === 'object') {
+    Object.keys(config.stratumPorts).forEach(function (key) {
+      entries.push({ algo: key, stratumPort: config.stratumPorts[key] });
+    });
+  }
+  entries.forEach(function (entry) {
     if (!entry || typeof entry !== 'object') return;
-    var name = normalizeAlgo(entry.name);
-    if (ALGOS.indexOf(name) !== -1 && entry.port) {
-      state.ports[name] = asNumber(entry.port) || state.ports[name];
-    }
+    var name = normalizeAlgo(entry.algo || entry.name || entry.algorithm);
+    if (ALGOS.indexOf(name) === -1) return;
+    var port = entry.stratumPort || entry.port;
+    if (port) state.ports[name] = asNumber(port) || state.ports[name];
+    if (entry.scheme) state.schemes[name] = String(entry.scheme).toLowerCase();
   });
+  if (config.payments && typeof config.payments === 'object') {
+    state.payments = config.payments;
+  }
   renderConnection();
+  renderSchemeBadges();
+  renderPayouts(null);
 }
 
 /* ---------- fetching / status ---------- */
@@ -378,7 +570,9 @@ function refresh() {
     fetchJson('/api/stats'),
     fetchJson('/api/blocks'),
     fetchJson('/api/workers'),
-    fetchJson('/api/config')
+    fetchJson('/api/config'),
+    fetchJson('/api/payouts'),
+    fetchJson('/api/payouts/blocks')
   ];
   return Promise.allSettled(endpoints).then(function (results) {
     var anyOk = results.some(function (r) { return r.status === 'fulfilled'; });
@@ -391,6 +585,11 @@ function refresh() {
     if (results[2].status === 'fulfilled') renderWorkers(results[2].value);
     if (results[3].status === 'fulfilled') renderConfig(results[3].value);
     else if (anyOk) renderConnection();
+    if (results[5] && results[5].status === 'fulfilled') {
+      renderStoreBlocks(results[5].value);
+      if (results[1].status === 'fulfilled') renderBlocks(results[1].value);
+    }
+    if (results[4] && results[4].status === 'fulfilled') renderPayouts(results[4].value);
     return allOk;
   }).catch(function () {
     // Promise.allSettled should not reject, but never let refresh crash the loop.
@@ -411,7 +610,18 @@ function init() {
     });
   }
 
+  var minerForm = document.getElementById('miner-form');
+  if (minerForm) {
+    minerForm.addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      var input = document.getElementById('miner-address');
+      lookupMiner(input ? input.value.trim() : '');
+    });
+  }
+
   renderConnection();
+  renderSchemeBadges();
+  renderPayouts(null);
   refresh();
   setInterval(refresh, REFRESH_MS);
   setInterval(updateUptime, 1000);

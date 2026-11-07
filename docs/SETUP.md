@@ -1,15 +1,15 @@
 # Interchained Tri-PoW Pool — Operator Setup
 
-This walkthrough takes an operator from a bare host to a running solo tri-PoW pool: SHA-256 on stratum port 3333, Yespower on 3334, Ethash on 3335, with the stats API and dashboard on 8080.
+This walkthrough takes an operator from a bare host to a running tri-PoW pool: SHA-256 on stratum port 3333, Yespower on 3334, Ethash on 3335, with the stats API and dashboard on 8080.
 
-Payout model reminder: **solo only**. The coinbase pays the miner's own address (the stratum username). PPLNS/PROP accounting and pooled payouts are future portal work and are **not** in this repo.
+Payout model reminder: the scheme is **per algorithm** — `"solo"`, `"pplns"`, or `"prop"`. In solo mode the coinbase pays the pool's configured `address` directly. In the group modes (PPLNS/PROP) the coinbase pays the pool wallet and the payments processor splits matured block rewards among miners (see §9, "Running a group pool"). Field-by-field config documentation is in `config/README.md`.
 
 ---
 
 ## 1. Prerequisites
 
 - A tri-PoW build of `interchainedd` (Bitcoin-0.21-derived; its `getblocktemplate` honours an `"algo"` key: `"sha256"` | `"yespower"` | `"ethash"`, and `generatetoaddress` takes an `"algo"` argument — useful on regtest).
-- Node.js (current LTS) and npm.
+- Node.js **16.20.2** and npm — pinned in `.nvmrc` (`nvm install && nvm use`). The legacy native dependencies (`bignum`, `multi-hashing`) build under Node 16 and fail on current Node (22/24); the pin is a hard requirement, proven by `scripts/boot-proof.sh`.
 - Miners: SHA-256 ASICs, a Yespower-capable CPU miner, and/or an Ethash-capable GPU miner, depending on which ports you enable.
 - On mainnet, tri-PoW activates at **height 913982**. Before that height, only legacy algorithms are valid — see Troubleshooting.
 
@@ -77,7 +77,8 @@ Walk through the mainnet file top to bottom before first start:
    Disable an algorithm by removing/disabling its port binding if you have no miners or no daemon support for it; do not leave an enabled port pointed at an algorithm the daemon will reject.
 4. **Difficulty / vardiff per port** — start from the example values. ASIC (3333), CPU (3334), and GPU (3335) hashrates differ by orders of magnitude; one difficulty policy does not fit all three.
 5. **API settings** — the stats service listens on `8080` (`api/server.js`). Keep it bound as in the example unless you are putting a reverse proxy in front of it.
-6. **Payout-related fields** — in solo mode there is no pool payout wallet to configure for miner rewards: each miner's coinbase is built for that miner's username/address. If the config carries an operator/donation address field, read its comment carefully and do not mistake it for a shared payout wallet.
+6. **Payout scheme per algorithm** — each entry under `algos` carries a `"scheme"`: `"solo"`, `"pplns"`, or `"prop"`. A `"pplns"` entry may also carry `"pplnsWindow"` (the number of shares in its PPLNS window; omit it to use the top-level default). Leave every algorithm on `"solo"` for a phase-1-style solo pool.
+7. **Payments (group modes only)** — the top-level `"payments"` object controls the payments processor: `enabled`, `dryRun` (default `true` — keep it `true` until §9's checklist), `feePercent`, `minPayout`, `confirmations`, `intervalSeconds`, and the default `pplnsWindow`. In solo mode the meaning of `address` is unchanged: it is the address the coinbase pays. In group modes `address` is the **pool wallet** address (see §9.1) — the coinbase pays it, and miners use their own addresses as stratum usernames.
 
 For regtest, copy the same walkthrough in the regtest file: daemon host/port must point at your `interchainedd -regtest` instance (its RPC port is whatever you set for regtest — set it explicitly in both `interchained.conf`/daemon flags and the pool config so the two agree), and stratum ports may stay 3333/3334/3335 if nothing else is using them.
 
@@ -206,8 +207,98 @@ Symptoms: first Ethash start or first job after an epoch change is slow; initial
 ## 8. Security notes
 
 - **Never expose daemon RPC (8332).** Anyone who reaches RPC with the credentials controls the daemon (including wallet and generation functions). Bind it to loopback, firewall it regardless, and use a long random `rpcpassword`. The pool needs RPC; the internet does not.
-- **Stratum is unauthenticated by design in solo mode.** There is no miner password database in this repo: **the payout address (username) is the identity.** Anyone can connect with any address and mine to it — that is mostly harmless because a solver can only pay the address they named, but it means: (a) miners must protect their *own* connection details if they care who can see their address/hashrate, (b) the operator must not treat a stratum username as proof of a person's identity for any out-of-band purpose, and (c) firewall/allowlist stratum ports if you run a private pool and do not want strangers mining to their own addresses through your daemon.
-- **A wrong payout address loses the block.** There is no pool operator who can "re-send" a coinbase. Miners should verify their username/address before hashing; operators should say so in any onboarding material.
+- **Stratum is unauthenticated by design.** There is no miner password database in this repo: **the payout address (username) is the identity.** Anyone can connect with any address and mine to it — in solo mode a solver can only pay the address they named, and in group modes shares (and therefore earnings) accrue to whatever address a miner names — but it means: (a) miners must protect their *own* connection details if they care who can see their address/hashrate, (b) the operator must not treat a stratum username as proof of a person's identity for any out-of-band purpose, and (c) firewall/allowlist stratum ports if you run a private pool and do not want strangers mining through your daemon.
+- **A wrong payout address loses the reward.** In solo mode there is no pool operator who can "re-send" a coinbase; in group modes earnings accrue to the named address and cannot be reassigned afterwards. Miners should verify their username/address before hashing; operators should say so in any onboarding material.
 - **Dashboard/API (8080) leaks operational information** (hashrates, worker addresses, uptime). Put it behind a reverse proxy with authentication, a VPN, or LAN-only binding for anything beyond local testing.
 - **Keep secrets out of git.** RPC credentials and any production config copies do not belong in commits, issues, screenshots, or dashboard posts.
 - **Run with least privilege.** Run daemon and pool as unprivileged users, keep the host patched, and keep the `LICENSE`/attribution intact if you redistribute the pool.
+
+## 9. Running a group pool (PPLNS/PROP)
+
+Solo (§1–§8) pays the configured `address` in the coinbase and needs no wallet management beyond your own. A group pool shares block rewards among everyone mining on an algorithm. This section walks through turning one or more algorithms into a group pool. Read it fully before enabling payments with real funds.
+
+### 9.1 Wallet setup — the pool wallet
+
+In group modes the coinbase pays the pool's configured `address`. That address is the **pool wallet**, and two requirements follow:
+
+- **The daemon wallet must control the `address`.** The coinbase pays `address`, and payouts are built from the pool wallet as PSBTs over daemon RPC (`walletcreatefundedpsbt`, then the signing stages). The wallet loaded in `interchainedd` must own `address` (its private key), or it can neither receive the rewards as spendable balance nor fund the distributions.
+- **The wallet must hold the matured rewards.** Payouts come out of block rewards — there is no separate float to fund. A block's reward only becomes spendable after it matures on-chain, which is why `payments.confirmations` (§9.3) must be set at or above the chain's coinbase maturity: the processor distributes a block only once the daemon reports it at the configured confirmation count via `getblock`. Do not set a lower value to "pay faster" — the funds are not spendable yet, and an orphaned block's reward does not exist at all.
+
+Because the daemon wallet is a **hot wallet** holding pool funds on an internet-connected host, treat it accordingly (§9.5).
+
+Set the pool wallet address as `address` in the pool config, and tell your miners: **connect with your own ITC address as the stratum username** (an optional `.worker` suffix is fine). That address is their payout address — there are no accounts, no registration, and no way to change it after shares are recorded.
+
+### 9.2 Choosing a scheme per algorithm
+
+Each algorithm is configured independently:
+
+```json
+{
+  "algos": {
+    "sha256":   { "scheme": "solo" },
+    "yespower": { "scheme": "pplns", "pplnsWindow": 10000 },
+    "ethash":   { "scheme": "prop" }
+  }
+}
+```
+
+(Only the scheme fields are shown; each entry keeps its `enabled`, `stratumPort`, `diff`, and `varDiff` settings as in §3.)
+
+- **solo** — coinbase direct to `address`; the payments processor does not distribute that algorithm's blocks. Right for your own rigs.
+- **prop** — a block's reward is split over the shares of the *current round* (since the previous block on that algorithm). Easiest to explain and audit.
+- **pplns** — a block's reward is split over the *last N shares* before the block, across round boundaries. N is the algorithm's `pplnsWindow`, falling back to the top-level `payments.pplnsWindow`. Fairer to steady miners under pool-hopping.
+
+You can mix schemes freely — e.g. solo SHA-256 for your own ASICs and a PPLNS Yespower pool for the public.
+
+### 9.3 Tuning: fee, minimum payout, confirmations
+
+The top-level `payments` object (see `config/README.md` for every field):
+
+```json
+{
+  "payments": {
+    "enabled": true,
+    "dryRun": true,
+    "feePercent": 1.0,
+    "minPayout": 1.0,
+    "confirmations": 100,
+    "intervalSeconds": 600,
+    "pplnsWindow": 5000
+  }
+}
+```
+
+- **`feePercent`** — deducted from each group-mode block reward before the split. `0` is valid (a no-fee pool); anything above a few percent will read as expensive to miners. State it publicly wherever you advertise the pool.
+- **`minPayout`** (ITC) — miners below this total keep a pending balance that carries forward instead of being sent dust every block. Too high and small miners wait a long time to see a first payout; too low and transaction fees eat the distributions.
+- **`confirmations`** — how deep a block must be before its reward is distributed. **Set it at or above the chain's coinbase maturity** (§9.1). Raising it further trades payout latency for safety against reorgs.
+- **`intervalSeconds`** — how often the processor checks for newly-matured blocks and runs distributions. 600 (10 minutes) is a sane default; very small values just poll the daemon more.
+- **`pplnsWindow`** (top level) — the default PPLNS window in *shares* for algorithms that do not set their own. Larger windows smooth income across more blocks; smaller windows track recent hashing more closely.
+
+### 9.4 Enabling payments — dry-run first
+
+1. Set `"enabled": true` and keep `"dryRun": true` (the default) in `payments`.
+2. Start the pool and API as in §4.
+3. **Watch the dry-run.** The processor records every accepted share and found block to the ledger at `api/data/payouts.json`, computes each matured block's split (fee, per-miner amounts, pending balances), and builds the payout batch's PSBT via `walletcreatefundedpsbt`, recording the batch with its base64 PSBT at stage `created` — but with `dryRun: true` it **never calls the signing stages** (`walletprocesspsbt`, `finalizepsbt`, `sendrawtransaction`) and no funds move. The batch PSBT is also visible via `/api/payouts`, so an external signer could take a `created` batch and finish it off-pool. Check the same data through the API:
+   - `curl http://localhost:8080/api/payouts` — recorded distributions and their status;
+   - `curl http://localhost:8080/api/miner/<address>` — a miner's shares, pending balance, and payouts;
+   - `curl http://localhost:8080/api/config` — confirm each algorithm's scheme and the payments summary (including dry-run) match your config;
+   - the dashboard's pool payouts panel shows the same picture, with a **DRY-RUN** indicator while dry-run is on.
+4. Let at least one group-mode block mature in dry-run and verify the split by hand against the ledger: weights are share difficulties, the fee comes off first, and sub-`minPayout` amounts sit in pending balances rather than vanishing.
+
+### 9.5 Go-live checklist
+
+Only when the dry-run numbers are right:
+
+- [ ] `payments.enabled` is `true` and the schemes in `/api/config` match your intent per algorithm.
+- [ ] The daemon wallet controls the configured `address` and holds the matured rewards (`interchained-cli getbalance`); `payments.confirmations` is at or above coinbase maturity.
+- [ ] The ledger `api/data/payouts.json` is backed up, and a backup routine exists (§9.6).
+- [ ] Set **`"dryRun": false`** — this is the single switch that authorises the real PSBT signing stages and broadcast (`walletprocesspsbt` → `finalizepsbt` → `sendrawtransaction`) — and restart the pool.
+- [ ] Watch the first real distribution: find its entry in `/api/payouts` / the ledger and confirm the recorded **txid** on the daemon (`interchained-cli gettransaction <txid>`), the recipient amounts, and that pending balances updated as expected.
+- [ ] Confirm the dashboard's DRY-RUN indicator is gone.
+
+### 9.6 Operator warnings
+
+- **Hot wallet risk.** Going live means an internet-reachable daemon wallet holds every group-mode block reward until distribution. Keep the host patched and RPC on loopback (§8), consider sweeping excess balance to cold storage manually, and never run a group pool from a wallet that also holds unrelated funds.
+- **Back up the ledger.** `api/data/payouts.json` is the record of who contributed what, who is owed a pending balance, and what has already been paid (txids included). Losing it loses the pending balances. Back it up like a wallet.
+- **Restarts are safe by design.** The ledger persists on disk; on restart the processor reloads it and resumes — shares, rounds/windows, pending balances, and recorded payouts survive. Do not delete or hand-edit the ledger of a running pool; stop the pool first if you must inspect or restore it, and restore from backup rather than reconstructing by hand.
+- **Dry-run records are records.** Dry-run distributions are written to the same ledger. When you go live, be sure you and your miners understand which recorded payouts were dry-run (never sent) — the API and dashboard mark dry-run state; the txid is the ground truth for "was this actually paid".
