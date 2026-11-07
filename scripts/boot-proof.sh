@@ -136,5 +136,96 @@ else
 fi
 grep -q "valid share\|\[sha256\] share:" "$POOL_LOG" && echo "INFO: pool log carries share events (see pool.log)"
 
+# --- 4. env-only boot ---------------------------------------------------------
+# A second pool instance whose DISTINGUISHING settings come ONLY from
+# ITC_* environment variables: the base file is the same harness config
+# (which carries no schemes, no payments object, no api port and no pool
+# name), layered under env via lib/envConfig.js. Then an API server is
+# built from that same env-loaded config and must REPORT the env values.
+echo "== env section: env-only boot (ports 14333/14334/14335, api 18099)"
+ENV_POOL_LOG="$PROOF_DIR/pool-env.log"
+ENV_LEDGER="$PROOF_DIR/env-payouts.json"
+rm -f "$ENV_LEDGER"
+ITC_POOL_CONFIG=scripts/harness-config.json \
+ITC_POOL_NAME=EnvProofPool \
+ITC_POOL_ADDRESS=1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2 \
+ITC_SHA256_STRATUM_PORT=14333 \
+ITC_YESPOWER_STRATUM_PORT=14334 \
+ITC_ETHASH_STRATUM_PORT=14335 \
+ITC_YESPOWER_SCHEME=pplns \
+ITC_YESPOWER_PPLNS_WINDOW=777 \
+ITC_ETHASH_SCHEME=prop \
+ITC_PAYMENTS_ENABLED=1 \
+ITC_PAYMENTS_FEE_PERCENT=2.5 \
+ITC_PAYMENTS_MIN_PAYOUT=3 \
+ITC_PAYMENTS_CONFIRMATIONS=42 \
+ITC_PAYMENTS_DATA_FILE="$ENV_LEDGER" \
+ITC_API_PORT=18099 \
+"$NODE" start.js >"$ENV_POOL_LOG" 2>&1 &
+PIDS="$PIDS $!"
+env_ok=1
+for port in 14333 14334 14335; do
+  wait_port "$port" 30 || { echo "BOOT-PROOF FAIL: env stratum port $port never listened"; env_ok=0; }
+done
+[ "$env_ok" -eq 1 ] || { cat "$ENV_POOL_LOG"; FAIL=1; }
+if [ "$env_ok" -eq 1 ]; then
+  echo "== env pool up: stratum ports 14333/14334/14335 listening"
+  assert_grep "env: pool name from env"        "$ENV_POOL_LOG" "pool name: EnvProofPool"
+  assert_grep "env: ethash adapter on env port" "$ENV_POOL_LOG" "Ethash stratum adapter listening on port 14335"
+  assert_grep "env: payments started, dry-run still on" "$ENV_POOL_LOG" "PSBT processor started (dryRun=true"
+  assert_grep "env: payments fee from env"      "$ENV_POOL_LOG" "fee=2.5%"
+  assert_grep "env: payments minPayout from env" "$ENV_POOL_LOG" "minPayout=3 ITC"
+  assert_grep "env: payments confirmations from env" "$ENV_POOL_LOG" "confirmations=42"
+  assert_grep "env: yespower scheme/window from env" "$ENV_POOL_LOG" '"yespower":{"scheme":"pplns","pplnsWindow":777}'
+  assert_grep "env: ethash scheme from env"     "$ENV_POOL_LOG" '"ethash":{"scheme":"prop"}'
+  assert_grep "env: ledger at env data file"    "$ENV_POOL_LOG" "ledger at $ENV_LEDGER"
+
+  # API built from the env-loaded config, listening on the env API port.
+  ITC_POOL_CONFIG=scripts/harness-config.json \
+  ITC_POOL_ADDRESS=1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2 \
+  ITC_SHA256_STRATUM_PORT=14333 \
+  ITC_YESPOWER_STRATUM_PORT=14334 \
+  ITC_ETHASH_STRATUM_PORT=14335 \
+  ITC_YESPOWER_SCHEME=pplns \
+  ITC_ETHASH_SCHEME=prop \
+  ITC_PAYMENTS_ENABLED=1 \
+  ITC_PAYMENTS_DRY_RUN=1 \
+  ITC_PAYMENTS_FEE_PERCENT=2.5 \
+  ITC_PAYMENTS_MIN_PAYOUT=3 \
+  ITC_API_PORT=18099 \
+  "$NODE" -e "
+    var cfg = require('./start.js').loadConfig();
+    var api = require('./api/server.js');
+    var srv = api.createServer({ poolConfig: cfg });
+    srv.listen(cfg.api.port, '127.0.0.1', function () {
+      console.log('env api listening on ' + cfg.api.port);
+    });
+  " >"$PROOF_DIR/api-env.log" 2>&1 &
+  PIDS="$PIDS $!"
+  if wait_port 18099 20; then
+    echo "PASS: env: API listening on env-supplied port 18099"
+    curl -s http://127.0.0.1:18099/api/config >"$PROOF_DIR/api-env-config.json"
+    assert_grep "env: API reports env stratum port" "$PROOF_DIR/api-env-config.json" '"yespower": 14334'
+    assert_grep "env: API reports env scheme"       "$PROOF_DIR/api-env-config.json" '"scheme": "pplns"'
+    assert_grep "env: API reports env pool address" "$PROOF_DIR/api-env-config.json" '"poolAddress": "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2"'
+    assert_grep "env: API reports env fee"          "$PROOF_DIR/api-env-config.json" '"feePercent": 2.5'
+    assert_grep "env: API reports env minPayout"    "$PROOF_DIR/api-env-config.json" '"minPayout": 3'
+    assert_grep "env: API reports dry-run on"       "$PROOF_DIR/api-env-config.json" '"dryRun": true'
+  else
+    echo "FAIL: env: API never listened on env-supplied port 18099"
+    cat "$PROOF_DIR/api-env.log"
+    FAIL=1
+  fi
+fi
+
+# Env-config unit proof (precedence + live-flag safety rule).
+if "$NODE" scripts/test-env-config.js >"$PROOF_DIR/test-env-config.log" 2>&1; then
+  echo "PASS: env-config unit proof (scripts/test-env-config.js)"
+else
+  echo "FAIL: env-config unit proof"
+  cat "$PROOF_DIR/test-env-config.log"
+  FAIL=1
+fi
+
 echo "== logs: $PROOF_DIR (stub.log, stub-calls.jsonl, pool.log, miner-*.log)"
 if [ "$FAIL" -eq 0 ]; then echo "BOOT-PROOF: PASS"; exit 0; else echo "BOOT-PROOF: FAIL"; exit 1; fi

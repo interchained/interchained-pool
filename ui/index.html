@@ -229,6 +229,45 @@
       </div>
     </section>
 
+    <section aria-labelledby="fairness-heading">
+      <h2 id="fairness-heading" class="section-title">Fairness &amp; Payout Breakdown</h2>
+      <div class="panel">
+        <p id="reconcile-summary" class="empty-note">Reconciliation: loading…</p>
+        <p id="reconcile-equation" class="miner-totals" hidden></p>
+        <ul id="reconcile-discrepancies" class="blocks-list" hidden></ul>
+        <div class="miner-row">
+          <label class="miner-label" for="fairness-block-select">Settled block</label>
+          <select id="fairness-block-select" class="miner-input"></select>
+          <button id="fairness-load" class="miner-btn" type="button">Show breakdown</button>
+        </div>
+        <p id="fairness-empty" class="empty-note">No settled blocks yet — breakdowns appear once a block's payout split is recorded.</p>
+        <div id="fairness-result" hidden>
+          <p id="fairness-meta" class="miner-totals"></p>
+          <p id="fairness-window" class="miner-totals"></p>
+          <div class="table-wrap">
+            <table class="workers-table fairness-table">
+              <thead>
+                <tr>
+                  <th scope="col">Miner</th>
+                  <th scope="col">Shares</th>
+                  <th scope="col">Weight</th>
+                  <th scope="col">Payout</th>
+                  <th scope="col">Paid out</th>
+                  <th scope="col">Carry-over created</th>
+                  <th scope="col">Carry-over consumed</th>
+                </tr>
+              </thead>
+              <tbody id="fairness-body"></tbody>
+            </table>
+          </div>
+          <p id="fairness-totals" class="miner-totals"></p>
+          <p class="miner-totals">Verify independently: download
+            <a id="fairness-ledger-link" href="#" rel="noopener">this block's raw ledger export</a>
+            and run <code>node scripts/verify-payout.js &lt;export.json&gt;</code> from the pool repo — no trust in this dashboard required.</p>
+        </div>
+      </div>
+    </section>
+
     <section aria-labelledby="connect-heading">
       <h2 id="connect-heading" class="section-title">Connect a Miner</h2>
       <p class="section-note">Solo mining pool. Point your miner at the port for its algorithm. Replace the address placeholder with your Interchained address.</p>

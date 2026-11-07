@@ -352,3 +352,11 @@ section:first-child .section-title { margin-top: 0.4rem; }
 .miner-btn:hover { background: rgba(212, 175, 55, 0.12); }
 .miner-totals { color: var(--text-muted); margin: 0.7rem 0 0; }
 @media (max-width: 900px) { .payout-summary { grid-template-columns: 1fr; } }
+
+/* Phase 3: fairness / breakdown panel */
+.fairness-table td, .fairness-table th { white-space: nowrap; }
+.reconcile-ok { color: var(--green); font-weight: 600; }
+.reconcile-bad { color: var(--red); font-weight: 600; }
+#reconcile-discrepancies li { color: var(--red); }
+#fairness-block-select { flex: 0 1 320px; }
+.fairness-mismatch { color: var(--red); font-weight: 600; }
