@@ -21,6 +21,96 @@ const ALGOS = ['sha256', 'yespower', 'ethash'];
 const STRATUM_PORTS = { sha256: 3333, yespower: 3334, ethash: 3335 };
 const DEFAULT_PORT = 8080;
 const DEFAULT_UI_DIR = path.join(__dirname, '..', 'ui');
+const DEFAULT_PAYOUTS_FILE = path.join(__dirname, 'data', 'payouts.json');
+const WINDOW_SECONDS = 600;
+const SAT_PER_ITC = 1e8;
+
+/* ------------------------------------------------------------------ *
+ * Phase 2: group payouts store (READ-ONLY for this lane).
+ * Written by the payouts lane; shape (fixed contract):
+ *   { version: 1,
+ *     shares:  [{algo, worker, workerName, difficulty, time, height}],
+ *     blocks:  [{algo, height, hash, reward(sat), finder, time, scheme,
+ *                status, confirmations, payoutId}],
+ *     balances:{ algo: { address: {pending(sat), paid(sat)} } },
+ *     payouts: [{id, algo, time, dryRun, txid, amounts:{addr:sat},
+ *                blocks:[heights], fee(sat)}] }
+ * A missing/corrupt file is normal (phase-1-only deployments): every
+ * reader below falls back to an empty store and never throws.
+ * Miner hashrate source: the payouts store (NOT the collector), so
+ * /api/miner works standalone; same diff-1 convention as collector.js:
+ *   hashrate = sum(share difficulties in 600s window) * 2^32 / 600
+ * ------------------------------------------------------------------ */
+function emptyPayoutsStore() {
+  return { version: 1, shares: [], blocks: [], balances: {}, payouts: [] };
+}
+
+function loadPayoutsStore(file) {
+  try {
+    const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!data || typeof data !== 'object') return emptyPayoutsStore();
+    return {
+      version: data.version != null ? data.version : 1,
+      shares: Array.isArray(data.shares) ? data.shares : [],
+      blocks: Array.isArray(data.blocks) ? data.blocks : [],
+      balances:
+        data.balances && typeof data.balances === 'object' ? data.balances : {},
+      payouts: Array.isArray(data.payouts) ? data.payouts : [],
+    };
+  } catch (_) {
+    return emptyPayoutsStore();
+  }
+}
+
+function satToItc(sat) {
+  const n = Number(sat);
+  return Number.isFinite(n) ? n / SAT_PER_ITC : 0;
+}
+
+function finiteOr(value, fallback) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+/* Payments summary from a pool config object (options.poolConfig).
+ * NOTE (phase-2 integration reconciliation): in the POOL CONFIG the
+ * payments.minPayout field is denominated in COINS (ITC) -- that is
+ * what lib/payouts/payments.js consumes (coinsToSat) and what
+ * config/README.md documents. (The payouts STORE, in contrast, is all
+ * satoshis.) So here the verbatim value is coins: minPayoutItc is the
+ * value itself and minPayoutSat is derived. */
+function paymentsSummary(poolConfig) {
+  const p =
+    poolConfig && poolConfig.payments && typeof poolConfig.payments === 'object'
+      ? poolConfig.payments
+      : {};
+  const minPayout = p.minPayout != null ? finiteOr(p.minPayout, null) : null;
+  return {
+    feePercent: p.feePercent != null ? finiteOr(p.feePercent, null) : null,
+    minPayout,
+    minPayoutSat: minPayout != null ? Math.round(minPayout * SAT_PER_ITC) : null,
+    minPayoutItc: minPayout,
+    dryRun: p.dryRun != null ? !!p.dryRun : null,
+    confirmations: p.confirmations != null ? finiteOr(p.confirmations, null) : null,
+  };
+}
+
+function algoConfig(poolConfig, algo) {
+  const a =
+    poolConfig && poolConfig.algos && typeof poolConfig.algos === 'object'
+      ? poolConfig.algos[algo]
+      : null;
+  const entry = a && typeof a === 'object' ? a : {};
+  return {
+    algo,
+    stratumPort: entry.stratumPort != null
+      ? finiteOr(entry.stratumPort, STRATUM_PORTS[algo])
+      : STRATUM_PORTS[algo],
+    // No poolConfig -> phase-1 solo default, reported honestly as such.
+    scheme: entry.scheme ? String(entry.scheme).toLowerCase() : 'solo',
+    pplnsWindow: entry.pplnsWindow != null ? entry.pplnsWindow : null,
+  };
+}
 
 const CONTENT_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -70,20 +160,137 @@ function sendHtml(res, status, html) {
   res.end(html);
 }
 
-function configPayload() {
+function configPayload(poolConfig) {
   const algos = {};
   const algoList = [];
+  const stratumPorts = {};
   for (const algo of ALGOS) {
-    algos[algo] = { algo, stratumPort: STRATUM_PORTS[algo] };
-    algoList.push({ algo, stratumPort: STRATUM_PORTS[algo] });
+    const entry = algoConfig(poolConfig, algo);
+    algos[algo] = entry;
+    algoList.push(entry);
+    stratumPorts[algo] = entry.stratumPort;
   }
+  const payments = paymentsSummary(poolConfig);
   return {
-    solo: true,
+    // Back-compat: true exactly when every algo is solo (always the
+    // case with no poolConfig, preserving the phase-1 payload).
+    solo: ALGOS.every((a) => algos[a].scheme === 'solo'),
     coin: 'Interchained (ITC)',
     algos,
     algoList,
-    stratumPorts: Object.assign({}, STRATUM_PORTS),
+    stratumPorts,
+    payments,
+    // Flat mirrors of the payments summary for simple consumers.
+    feePercent: payments.feePercent,
+    minPayout: payments.minPayout,
+    dryRun: payments.dryRun,
+    poolAddress:
+      poolConfig && poolConfig.address != null ? poolConfig.address : null,
+    poolConfigProvided: !!poolConfig,
   };
+}
+
+/* GET /api/miner/<address> payload, or null when the address has no
+ * shares and no balances in the payouts store (caller sends 404). */
+function minerPayload(store, address) {
+  const algoNames = new Set(ALGOS);
+  for (const s of store.shares) if (s && s.algo) algoNames.add(String(s.algo).toLowerCase());
+  for (const a of Object.keys(store.balances)) algoNames.add(String(a).toLowerCase());
+
+  const now = Date.now();
+  const cutoff = now - WINDOW_SECONDS * 1000;
+  const algos = {};
+  let found = false;
+  const totals = {
+    shares: 0, shareDifficultySum: 0, hashrateEstimate: 0,
+    pendingSat: 0, paidSat: 0, pendingItc: 0, paidItc: 0, lastShareAt: null,
+  };
+
+  for (const algo of algoNames) {
+    let shares = 0;
+    let shareDifficultySum = 0;
+    let windowDiff = 0;
+    let lastShareAt = null;
+    for (const s of store.shares) {
+      if (!s || String(s.algo || '').toLowerCase() !== algo) continue;
+      if (s.worker !== address) continue; // exact payout address only
+      const diff = finiteOr(s.difficulty, 1);
+      const t = finiteOr(s.time, 0);
+      shares += 1;
+      shareDifficultySum += diff;
+      if (t >= cutoff) windowDiff += diff;
+      if (t && (lastShareAt == null || t > lastShareAt)) lastShareAt = t;
+    }
+    const balForAlgo =
+      store.balances[algo] && typeof store.balances[algo] === 'object'
+        ? store.balances[algo][address]
+        : null;
+    const hasBalance = !!(balForAlgo && typeof balForAlgo === 'object');
+    if (shares > 0 || hasBalance) found = true;
+    const pendingSat = hasBalance ? finiteOr(balForAlgo.pending, 0) : 0;
+    const paidSat = hasBalance ? finiteOr(balForAlgo.paid, 0) : 0;
+    const entry = {
+      shares,
+      shareDifficultySum,
+      hashrateEstimate: (windowDiff * Math.pow(2, 32)) / WINDOW_SECONDS,
+      lastShareAt,
+      pendingSat,
+      paidSat,
+      pendingItc: satToItc(pendingSat),
+      paidItc: satToItc(paidSat),
+    };
+    algos[algo] = entry;
+    totals.shares += entry.shares;
+    totals.shareDifficultySum += entry.shareDifficultySum;
+    totals.hashrateEstimate += entry.hashrateEstimate;
+    totals.pendingSat += entry.pendingSat;
+    totals.paidSat += entry.paidSat;
+    if (entry.lastShareAt != null &&
+        (totals.lastShareAt == null || entry.lastShareAt > totals.lastShareAt)) {
+      totals.lastShareAt = entry.lastShareAt;
+    }
+  }
+  if (!found) return null;
+  totals.pendingItc = satToItc(totals.pendingSat);
+  totals.paidItc = satToItc(totals.paidSat);
+  return { address, algos, totals };
+}
+
+function enrichPayout(p) {
+  const amounts = p && p.amounts && typeof p.amounts === 'object' ? p.amounts : {};
+  let totalSat = 0;
+  for (const addr of Object.keys(amounts)) totalSat += finiteOr(amounts[addr], 0);
+  return Object.assign({}, p, {
+    amounts,
+    totalSat,
+    totalItc: satToItc(totalSat),
+    total: totalSat,
+    minersPaid: Object.keys(amounts).length,
+    miners: Object.keys(amounts).length,
+    feeSat: p ? finiteOr(p.fee, 0) : 0,
+    feeItc: satToItc(p ? finiteOr(p.fee, 0) : 0),
+  });
+}
+
+function enrichStoreBlock(b) {
+  const rewardSat = finiteOr(b && b.reward, 0);
+  return Object.assign({}, b, {
+    rewardSat,
+    rewardItc: satToItc(rewardSat),
+    status: b && b.status ? b.status : 'pending',
+    scheme: b && b.scheme ? b.scheme : null,
+  });
+}
+
+function storeBlocksPayload(store, limit) {
+  const blocks = store.blocks
+    .filter((b) => b && typeof b === 'object')
+    .map(enrichStoreBlock);
+  blocks.sort((x, y) =>
+    finiteOr(y.time, 0) - finiteOr(x.time, 0) ||
+    finiteOr(y.height, 0) - finiteOr(x.height, 0));
+  const n = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Number(limit) : 100;
+  return blocks.slice(0, n);
 }
 
 /**
@@ -93,6 +300,13 @@ function configPayload() {
  *        is created when omitted)
  * @param {string} [options.uiDir] static root (default: ../ui)
  * @param {string|null} [options.dataFile] forwarded to a fresh collector
+ * @param {string} [options.payoutsFile] payouts store path (phase 2);
+ *        falls back to env ITC_PAYOUTS_FILE, then api/data/payouts.json.
+ *        Read fresh on every phase-2 request; absence is tolerated.
+ * @param {object} [options.poolConfig] pool config object
+ *        ({address, algos:{algo:{stratumPort, scheme, pplnsWindow}},
+ *          payments:{feePercent, minPayout, dryRun, confirmations}})
+ *        surfaced by /api/config and /api/payouts.
  * Returns an http.Server that is NOT yet listening.
  * Passing a StatsCollector directly as the argument also works.
  */
@@ -104,6 +318,11 @@ function createServer(options) {
   const collector =
     opts.collector || new StatsCollector({ dataFile: opts.dataFile });
   const uiDir = opts.uiDir || DEFAULT_UI_DIR;
+  const payoutsFile =
+    opts.payoutsFile || process.env.ITC_PAYOUTS_FILE || DEFAULT_PAYOUTS_FILE;
+  const poolConfig =
+    opts.poolConfig && typeof opts.poolConfig === 'object' ? opts.poolConfig : null;
+  const readStore = () => loadPayoutsStore(payoutsFile);
 
   const server = http.createServer((req, res) => {
     let parsed;
@@ -131,6 +350,14 @@ function createServer(options) {
     }
     if (pathname === '/api/blocks') {
       const limit = parsed.searchParams.get('limit');
+      // Phase 2: ?source=store|payouts returns payouts-store blocks with
+      // distribution status; default (no source) is the phase-1
+      // collector behaviour, unchanged.
+      const source = (parsed.searchParams.get('source') || '').toLowerCase();
+      if (source === 'store' || source === 'payouts') {
+        sendJson(res, 200, storeBlocksPayload(readStore(), limit ? Number(limit) : undefined));
+        return;
+      }
       sendJson(res, 200, collector.getBlocks(limit ? Number(limit) : undefined));
       return;
     }
@@ -139,7 +366,38 @@ function createServer(options) {
       return;
     }
     if (pathname === '/api/config') {
-      sendJson(res, 200, configPayload());
+      sendJson(res, 200, configPayload(poolConfig));
+      return;
+    }
+    // ------------------------------------------------------ phase 2 API
+    if (pathname === '/api/payouts') {
+      const store = readStore();
+      const payouts = store.payouts
+        .filter((p) => p && typeof p === 'object')
+        .map(enrichPayout)
+        .sort((x, y) => finiteOr(y.time, 0) - finiteOr(x.time, 0))
+        .slice(0, 100);
+      sendJson(res, 200, { payouts, pool: paymentsSummary(poolConfig) });
+      return;
+    }
+    if (pathname === '/api/payouts/blocks') {
+      const limit = parsed.searchParams.get('limit');
+      sendJson(res, 200, storeBlocksPayload(readStore(), limit ? Number(limit) : undefined));
+      return;
+    }
+    if (pathname.startsWith('/api/miner/')) {
+      let address = '';
+      try {
+        address = decodeURIComponent(pathname.slice('/api/miner/'.length));
+      } catch (_) {
+        address = '';
+      }
+      const payload = address ? minerPayload(readStore(), address) : null;
+      if (!payload) {
+        sendJson(res, 404, { error: 'miner not found' });
+        return;
+      }
+      sendJson(res, 200, payload);
       return;
     }
     if (pathname.startsWith('/api/')) {
@@ -153,6 +411,8 @@ function createServer(options) {
 
   // Exposed for integration/tests: the collector this server reports on.
   server.collector = collector;
+  server.payoutsFile = payoutsFile;
+  server.poolConfig = poolConfig;
   return server;
 }
 

@@ -41,6 +41,7 @@
           <div class="card-head">
             <h3 class="algo-name">SHA256</h3>
             <span class="badge badge-sha256">ASIC</span>
+            <span class="badge badge-scheme" data-field="scheme">—</span>
           </div>
           <div class="hashrate" data-field="hashrate">0 H/s</div>
           <p class="waiting-note" data-field="waiting" hidden>Waiting for shares…</p>
@@ -68,6 +69,7 @@
           <div class="card-head">
             <h3 class="algo-name">Yespower</h3>
             <span class="badge badge-yespower">CPU</span>
+            <span class="badge badge-scheme" data-field="scheme">—</span>
           </div>
           <div class="hashrate" data-field="hashrate">0 H/s</div>
           <p class="waiting-note" data-field="waiting" hidden>Waiting for shares…</p>
@@ -95,6 +97,7 @@
           <div class="card-head">
             <h3 class="algo-name">Ethash</h3>
             <span class="badge badge-ethash">GPU</span>
+            <span class="badge badge-scheme" data-field="scheme">—</span>
           </div>
           <div class="hashrate" data-field="hashrate">0 H/s</div>
           <p class="waiting-note" data-field="waiting" hidden>Waiting for shares…</p>
@@ -147,7 +150,82 @@
       <h2 id="blocks-heading" class="section-title">Recent Blocks</h2>
       <div class="panel">
         <p id="blocks-empty" class="empty-note">No blocks yet — waiting for the first block.</p>
-        <ul id="blocks-list" class="blocks-list"></ul>
+        <div class="table-wrap">
+          <table class="workers-table blocks-table">
+            <thead>
+              <tr>
+                <th scope="col">Height</th>
+                <th scope="col">Algo</th>
+                <th scope="col">Hash</th>
+                <th scope="col">Time</th>
+                <th scope="col">Distribution</th>
+              </tr>
+            </thead>
+            <tbody id="blocks-body"></tbody>
+          </table>
+        </div>
+        <ul id="blocks-list" class="blocks-list" hidden></ul>
+      </div>
+    </section>
+
+
+    <section aria-labelledby="payouts-heading">
+      <h2 id="payouts-heading" class="section-title">Pool Payouts</h2>
+      <div class="panel">
+        <div class="payout-summary">
+          <div class="stat-row"><dt>Pool fee</dt><dd id="payouts-fee">—</dd></div>
+          <div class="stat-row"><dt>Minimum payout</dt><dd id="payouts-min">—</dd></div>
+          <div class="stat-row"><dt>Confirmations required</dt><dd id="payouts-confirmations">—</dd></div>
+          <div class="stat-row"><dt>Mode</dt><dd><span id="payouts-mode" class="badge badge-mode">Not configured</span></dd></div>
+        </div>
+        <p id="payouts-empty" class="empty-note">No payout batches yet.</p>
+        <div class="table-wrap">
+          <table class="workers-table payouts-table">
+            <thead>
+              <tr>
+                <th scope="col">Time</th>
+                <th scope="col">Algo</th>
+                <th scope="col">Total</th>
+                <th scope="col">Miners paid</th>
+                <th scope="col">TxID</th>
+              </tr>
+            </thead>
+            <tbody id="payouts-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section aria-labelledby="miner-heading">
+      <h2 id="miner-heading" class="section-title">Miner Lookup</h2>
+      <div class="panel">
+        <form id="miner-form" class="miner-form">
+          <label class="miner-label" for="miner-address">ITC payout address</label>
+          <div class="miner-row">
+            <input id="miner-address" class="miner-input mono" type="text" placeholder="Enter your ITC address" autocomplete="off" spellcheck="false">
+            <button class="miner-btn" type="submit">Look up</button>
+          </div>
+        </form>
+        <p id="miner-notfound" class="empty-note" hidden>Miner not found — no shares or balances for that address.</p>
+        <p id="miner-empty" class="empty-note">Enter an address to see its shares, hashrate estimate and balances.</p>
+        <div id="miner-result" hidden>
+          <div class="table-wrap">
+            <table class="workers-table miner-table">
+              <thead>
+                <tr>
+                  <th scope="col">Algo</th>
+                  <th scope="col">Shares</th>
+                  <th scope="col">Hashrate est.</th>
+                  <th scope="col">Last share</th>
+                  <th scope="col">Pending</th>
+                  <th scope="col">Paid</th>
+                </tr>
+              </thead>
+              <tbody id="miner-body"></tbody>
+            </table>
+          </div>
+          <p class="miner-totals">Totals: <span id="miner-totals"></span></p>
+        </div>
       </div>
     </section>
 

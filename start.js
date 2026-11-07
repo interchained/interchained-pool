@@ -1,18 +1,30 @@
 'use strict';
 /*
- * Interchained (ITC) tri-PoW solo mining pool - entry point.
+ * Interchained (ITC) tri-PoW mining pool - entry point.
  *
- * Boots THREE stratum pool instances from one config file, one per PoW
+ * Boots THREE pool instances from one config file, one per PoW
  * algorithm, all talking to the same Interchained daemon:
  *
- *     sha256    stratum port 3333
- *     yespower  stratum port 3334
- *     ethash    stratum port 3335
+ *     sha256    stratum port 3333 (classic stratum)
+ *     yespower  stratum port 3334 (classic stratum)
+ *     ethash    stratum port 3335 (Ethash stratum dialect,
+ *               lib/ethash/ethashPool.js -- the classic protocol cannot
+ *               express Ethash shares, so the ethash instance runs with
+ *               no classic ports and the adapter serves the port)
  *
- * Solo mining only: there are no accounts, no shares ledger and no pool
- * fee. A block's coinbase pays the payout address directly - the miner
- * connects with that address as its stratum username, and the same address
- * is configured as the pool's `address` (see config/README.md).
+ * Payout schemes are per-algo ("scheme" in each algo's config entry):
+ *   solo  - no ledger, no fee: the block coinbase pays the configured
+ *           `address` directly (phase-1 behaviour).
+ *   prop  - group mode: rewards split over the shares of the current
+ *           round (since the previous block of that algo).
+ *   pplns - group mode: rewards split over the last N shares.
+ * Group modes need the top-level "payments" config enabled: shares and
+ * blocks are recorded to a JSON ledger (default api/data/payouts.json)
+ * and a processor pays matured rewards out as PSBTs from the pool
+ * wallet (dry-run by default -- see lib/payouts/payments.js and
+ * docs/SETUP.md). In group modes the coinbase pays the configured
+ * `address` (the pool wallet) and miners connect with THEIR OWN
+ * address as stratum username -- that address is their payout address.
  *
  * Usage:
  *     node start.js [path/to/config.json]
@@ -25,6 +37,11 @@ var fs = require('fs');
 var path = require('path');
 
 var stratumPool = require('./lib/index.js');
+var daemonModule = require('./lib/daemon.js');
+var payoutsLedger = require('./lib/payouts/ledger.js');
+var payoutsAttach = require('./lib/payouts/attach.js');
+var paymentsModule = require('./lib/payouts/payments.js');
+var ethashPool = require('./lib/ethash/ethashPool.js');
 
 /* Stratum ports from the shared tri-PoW contract. A config file may
    override them, but these are the defaults when it does not. */
@@ -130,10 +147,16 @@ function buildPoolOptions(config, entry) {
     var algorithm = entry.algorithm || entry.algo;
     var stratumPort = entry.stratumPort || entry.port || DEFAULT_STRATUM_PORTS[algorithm];
 
+    /* The ethash instance configures NO classic stratum ports: its
+       stratum is served by the Ethash adapter (attached in createPools
+       once the pool has started and its JobManager exists), and lib/
+       pool.js skips the classic server when ports is empty. */
     var ports = {};
-    var portConfig = { diff: entry.diff };
-    if (entry.varDiff) portConfig.varDiff = entry.varDiff;
-    ports[String(stratumPort)] = portConfig;
+    if (algorithm !== 'ethash') {
+        var portConfig = { diff: entry.diff };
+        if (entry.varDiff) portConfig.varDiff = entry.varDiff;
+        ports[String(stratumPort)] = portConfig;
+    }
 
     return {
         coin: {
@@ -147,8 +170,22 @@ function buildPoolOptions(config, entry) {
                getnetworkinfo, which is the code path pool.js then uses. */
         },
 
-        /* Solo payout address. Set this (in the config) to the same ITC
-           address miners connect with as their username. */
+        /* Payout scheme for this algo, read by lib/payouts/attach.js
+           (resolveScheme) when the payments ledger is attached. In
+           group modes (prop/pplns) this entry may also carry
+           pplnsWindow. */
+        payments: {
+            scheme: entry.scheme || 'solo',
+            pplnsWindow: entry.pplnsWindow
+        },
+
+        /* Port the Ethash stratum adapter binds for the ethash pool. */
+        ethashStratumPort: (algorithm === 'ethash') ? stratumPort : undefined,
+
+        /* Payout address. Solo: the ITC address miners connect with as
+           their username. Group modes: the POOL wallet address (the
+           coinbase pays the pool; the payments processor pays miners
+           from this wallet as PSBTs). */
         address: config.address || config.poolAddress,
 
         /* Interchained submits blocks with `submitblock <hex>` - force it
@@ -258,6 +295,29 @@ function createPools(config) {
             console.error('[pool] could not create ' + algorithm + ' pool: ' + e.message);
             return;
         }
+        pool.poolAlgo = algorithm;
+
+        if (algorithm === 'ethash') {
+            /* The Ethash adapter needs pool.jobManager and pool.daemon,
+               which only exist once the pool has started; attach on the
+               pool's 'started' event (the adapter immediately feeds the
+               then-current job, so no template is missed). */
+            pool.on('started', function () {
+                try {
+                    pool.ethashAdapter = ethashPool.attachEthash(pool, {
+                        port: pool.options.ethashStratumPort,
+                        authorizeFn: authorizeFn,
+                        logger: function (severity, text) {
+                            console.log('[ethash] ' + severity + ': ' + text);
+                        }
+                    });
+                    console.log('[ethash] Ethash stratum adapter listening on port ' +
+                        pool.options.ethashStratumPort);
+                } catch (e2) {
+                    console.error('[ethash] could not attach Ethash stratum adapter: ' + e2.message);
+                }
+            });
+        }
 
         pool.on('share', function (isValidShare, isValidBlock, data) {
             var kind = isValidBlock ? 'BLOCK FOUND' : (isValidShare ? 'valid share' : 'invalid share');
@@ -276,16 +336,68 @@ function createPools(config) {
     return pools;
 }
 
+/* Phase 2: group payouts. When the config's top-level "payments"
+ * object has enabled:true, wire every pool (solo included, for stats)
+ * into one shared JSON ledger and start the PSBT payments processor.
+ * No-op otherwise -- phase-1 solo behaviour is untouched. */
+function setupPayments(config, pools) {
+    if (!config.payments || !config.payments.enabled) return null;
+    var payCfg = config.payments;
+
+    var schemesMap = {};
+    algoEntries(config).forEach(function (entry) {
+        var a = entry.algorithm || entry.algo;
+        schemesMap[a] = {
+            scheme: entry.scheme || 'solo',
+            pplnsWindow: (typeof entry.pplnsWindow === 'number') ? entry.pplnsWindow
+                : (typeof payCfg.pplnsWindow === 'number' ? payCfg.pplnsWindow : undefined)
+        };
+    });
+
+    var dataFile = payCfg.dataFile || path.join(__dirname, 'api', 'data', 'payouts.json');
+    var ledger = new payoutsLedger.Ledger({ dataFile: dataFile });
+
+    pools.forEach(function (pool) {
+        payoutsAttach.attachPayouts(pool, pool.poolAlgo, ledger, { schemes: schemesMap });
+    });
+
+    var daemon = new daemonModule.interface(daemonList(config), function (severity, message) {
+        console.log('[payments] ' + severity + ': ' + message);
+    });
+    daemon.init();
+
+    var processor = paymentsModule.createPaymentsProcessor({
+        daemon: daemon,
+        ledger: ledger,
+        config: {
+            enabled: true,
+            dryRun: payCfg.dryRun,
+            feePercent: payCfg.feePercent,
+            minPayout: payCfg.minPayout,
+            confirmations: payCfg.confirmations,
+            intervalSeconds: payCfg.intervalSeconds,
+            schemes: schemesMap
+        },
+        logger: function (severity, message) { console.log(severity + ': ' + message); }
+    });
+    processor.start();
+    console.log('[payments] ledger at ' + dataFile + '; PSBT processor started ' +
+        '(dryRun=' + processor.config.dryRun + ', fee=' + processor.config.feePercent +
+        '%, minPayout=' + payCfg.minPayout + ' ITC, confirmations=' + processor.config.confirmations +
+        ', schemes=' + JSON.stringify(schemesMap) + ')');
+    return { ledger: ledger, processor: processor, daemon: daemon };
+}
+
 function main() {
     var configPath = process.argv[2] || process.env.ITC_POOL_CONFIG;
     var config = loadConfig(configPath);
 
-    console.log('Interchained tri-PoW solo pool');
+    console.log('Interchained tri-PoW pool (solo / PROP / PPLNS)');
     console.log('config: ' + config.__path);
 
     if (!config.address && !config.poolAddress) {
         console.error('ERROR: no payout address in config - set "address" to your ITC address ' +
-            '(the same address miners use as their stratum username).');
+            '(solo: the address miners use as their stratum username; group modes: the pool wallet address).');
         process.exit(1);
     }
 
@@ -296,6 +408,7 @@ function main() {
     }
 
     pools.forEach(function (pool) { pool.start(); });
+    setupPayments(config, pools);
 }
 
 if (require.main === module) {
@@ -308,5 +421,6 @@ module.exports = {
     buildPoolOptions: buildPoolOptions,
     authorizeFn: authorizeFn,
     createPools: createPools,
+    setupPayments: setupPayments,
     DEFAULT_STRATUM_PORTS: DEFAULT_STRATUM_PORTS
 };
