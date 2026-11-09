@@ -19,6 +19,7 @@ const StatsCollector = require('./collector');
 const payoutsBreakdown = require('../lib/payouts/breakdown');
 const payoutsReconcile = require('../lib/payouts/reconcile');
 const chatStoreModule = require('./chatStore');
+const vitalsStoreModule = require('./vitalsStore');
 
 const ALGOS = ['sha256', 'yespower', 'ethash'];
 const STRATUM_PORTS = { sha256: 3333, yespower: 3334, ethash: 3335 };
@@ -348,6 +349,45 @@ function createServer(options) {
     if (!chat) chat = chatStoreModule.createChatStore({ dir: opts.chatDir });
     return chat;
   };
+
+  /* Pool vitals cache (NEDB embedded — see api/vitalsStore.js). The
+     host process (start.js) injects its store via opts.vitalsStore;
+     any other server of this dashboard opens the same store itself,
+     so the network panel and the chart history work no matter which
+     process serves the page. A missing engine degrades the cache to
+     "unavailable" and nothing else. */
+  let vitals = opts.vitalsStore || null;
+  let vitalsFailed = false;
+  const getVitals = () => {
+    if (vitals || vitalsFailed) return vitals;
+    try {
+      vitals = vitalsStoreModule.createVitalsStore({ dir: opts.vitalsDir });
+    } catch (_) {
+      // NEDB is single-opener: when the pool process holds the store
+      // (the normal case) this open is refused — the mirror file
+      // below is the read path then, not an error worth repeating.
+      vitalsFailed = true;
+      vitals = null;
+    }
+    return vitals;
+  };
+  const getVitalsMirror = () => {
+    try { return vitalsStoreModule.readMirrorFile(opts.vitalsMirrorFile); }
+    catch (_) { return null; }
+  };
+  const filterSamples = (samples, parsed) => {
+    let out = Array.isArray(samples) ? samples.slice() : [];
+    const sinceRaw = parsed.searchParams.get('since');
+    if (sinceRaw != null && Number.isFinite(Number(sinceRaw))) {
+      const since = Number(sinceRaw);
+      out = out.filter((s) => s && typeof s.t === 'number' && s.t >= since);
+    }
+    const limitRaw = parsed.searchParams.get('limit');
+    let limit = limitRaw != null && Number(limitRaw) > 0 ? Number(limitRaw) : 10000;
+    limit = Math.min(limit, 50000);
+    if (out.length > limit) out = out.slice(out.length - limit);
+    return out;
+  };
   const chatRate = new Map(); // ip -> { last: ts, minute: [ts] }
   const chatRateOk = (ip) => {
     const now = Date.now();
@@ -465,13 +505,49 @@ function createServer(options) {
     }
     if (pathname === '/api/network') {
       /* Chain vitals from the daemon, polled by the host process
-         (start.js) and injected as options.networkProvider. The
-         standalone server has no daemon wiring: report that
-         honestly instead of inventing numbers. */
+         (start.js) and injected as options.networkProvider. When no
+         provider is injected (standalone server), fall back to the
+         NEDB vitals cache the pool process keeps fresh — the
+         snapshot's own updatedAt shows how old the cached read is.
+         With neither, report unavailable honestly. */
       let net = null;
       try { net = typeof opts.networkProvider === 'function' ? opts.networkProvider() : null; }
       catch (_) { net = null; }
+      if (!net) {
+        try {
+          const v = getVitals();
+          if (v) net = v.readNetwork();
+        } catch (_) { net = null; }
+      }
+      if (!net) {
+        const mirror = getVitalsMirror();
+        if (mirror && mirror.network && mirror.network.available) net = mirror.network;
+      }
       sendJson(res, 200, net || { available: false });
+      return;
+    }
+    if (pathname === '/api/history') {
+      /* Hashrate history from the NEDB vitals cache: samples the pool
+         process appends every 30 s ({t, height, sha256, yespower,
+         ethash}). Query: ?since=<ms epoch>&limit=<n>. The dashboard
+         seeds its charts from this so history survives reboots and
+         page loads. */
+      let samples = null;
+      try {
+        const v = getVitals();
+        if (v) {
+          samples = v.listSamples({
+            since: parsed.searchParams.get('since') != null ? Number(parsed.searchParams.get('since')) : undefined,
+            limit: parsed.searchParams.get('limit') != null ? Number(parsed.searchParams.get('limit')) : undefined
+          });
+        }
+      } catch (_) { samples = null; }
+      if (!samples) {
+        const mirror = getVitalsMirror();
+        if (mirror) samples = filterSamples(mirror.samples, parsed);
+      }
+      if (samples) sendJson(res, 200, { available: true, samples });
+      else sendJson(res, 200, { available: false, samples: [] });
       return;
     }
     // ------------------------------------------------------ phase 2 API

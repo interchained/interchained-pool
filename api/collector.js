@@ -21,6 +21,7 @@ const path = require('path');
 const ALGOS = ['sha256', 'yespower', 'ethash'];
 const DEFAULT_WINDOW_SECONDS = 600;
 const MAX_BLOCKS_PER_ALGO = 100;
+const MAX_WINDOW_ENTRIES = 10000;
 const SAVE_INTERVAL_MS = 10000;
 
 function normalizeAlgo(algo) {
@@ -46,6 +47,23 @@ function toPositiveDiff(value, fallback) {
   return fallback;
 }
 
+/* Restore a persisted rolling window: keep only well-formed
+   {t, diff} entries, newest last, capped like the snapshot writer.
+   Staleness is not handled here — _windowHashrate prunes entries
+   older than the window horizon on every read. */
+function sanitizeWindow(arr) {
+  if (!Array.isArray(arr)) return [];
+  const out = [];
+  for (const e of arr) {
+    if (!e || typeof e !== 'object') continue;
+    const t = Number(e.t);
+    const diff = Number(e.diff);
+    if (!Number.isFinite(t) || !Number.isFinite(diff) || diff <= 0) continue;
+    out.push({ t, diff });
+  }
+  return out.slice(-MAX_WINDOW_ENTRIES);
+}
+
 class StatsCollector {
   /**
    * @param {object} [options]
@@ -69,7 +87,7 @@ class StatsCollector {
     // { sharesAccepted, sharesRejected,
     //   workers: { name: {shares, invalidShares, lastShareAt, connected, window:[{t,diff}] } },
     //   blocksFound: [{height, algo, hash, time}],
-    //   window: [{t, diff}] }   // rolling window, never persisted
+    //   window: [{t, diff}] }   // rolling window, persisted in the snapshot
     this.algos = {};
     for (const algo of ALGOS) this.algos[algo] = this._emptyAlgoState();
 
@@ -353,6 +371,9 @@ class StatsCollector {
           invalidShares: w.invalidShares,
           lastShareAt: w.lastShareAt != null ? w.lastShareAt : null,
           connected: !!w.connected,
+          // Rolling window included so a restart does not zero the
+          // worker's hashrate estimate (see _snapshot note below).
+          window: Array.isArray(w.window) ? w.window.slice(-MAX_WINDOW_ENTRIES) : [],
         };
       }
       algos[algo] = {
@@ -360,9 +381,14 @@ class StatsCollector {
         sharesRejected: s.sharesRejected,
         workers,
         blocksFound: s.blocksFound.slice(-MAX_BLOCKS_PER_ALGO),
+        window: Array.isArray(s.window) ? s.window.slice(-MAX_WINDOW_ENTRIES) : [],
       };
     }
-    // Counters + blocks + worker counters only: NOT the rolling windows.
+    // Counters + blocks + the rolling windows. The windows ride along
+    // so the hashrate readouts survive a pool restart instead of
+    // rebuilding from an empty window (the "hashrate is different
+    // after reboot" bug); entries older than the window horizon are
+    // pruned on read by _windowHashrate as usual.
     return { version: 1, startTime: this.startTime, savedAt: Date.now(), algos };
   }
 
@@ -389,6 +415,7 @@ class StatsCollector {
             }))
             .slice(-MAX_BLOCKS_PER_ALGO);
         }
+        state.window = sanitizeWindow(s.window);
         const savedWorkers = s.workers && typeof s.workers === 'object' ? s.workers : {};
         for (const name of Object.keys(savedWorkers)) {
           const w = this._ensureWorker(state, name);
@@ -396,6 +423,7 @@ class StatsCollector {
           w.shares = Number(sw.shares) || 0;
           w.invalidShares = Number(sw.invalidShares) || 0;
           w.lastShareAt = sw.lastShareAt != null ? Number(sw.lastShareAt) || null : null;
+          w.window = sanitizeWindow(sw.window);
           // A worker persisted as connected is stale after a restart.
           w.connected = false;
         }
