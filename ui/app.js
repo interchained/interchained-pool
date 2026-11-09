@@ -2,754 +2,700 @@
 
 /* Interchained Tri-PoW pool dashboard — vanilla JS, no dependencies.
    All API-supplied strings are rendered with textContent / createElement.
-   Static structure lives in index.html; this file only fills it in. */
+   Static structure lives in index.html; this file only fills it in.
+   Charts are drawn from a client-side ring buffer of /api/stats samples:
+   no backend support needed, history starts when the page opens. */
 
 var ALGOS = ['sha256', 'yespower', 'ethash'];
 
 var ALGO_META = {
-  sha256: { label: 'SHA256', kind: 'ASIC', defaultPort: 3333 },
-  yespower: { label: 'Yespower', kind: 'CPU', defaultPort: 3334 },
-  ethash: { label: 'Ethash', kind: 'GPU', defaultPort: 3335 }
+  sha256:   { label: 'SHA256',   kind: 'ASIC', defaultPort: 3333, color: '#f7931a' },
+  yespower: { label: 'Yespower', kind: 'CPU',  defaultPort: 3334, color: '#3fb96f' },
+  ethash:   { label: 'Ethash',   kind: 'GPU',  defaultPort: 3335, color: '#8a7cff' }
 };
 
 var REFRESH_MS = 10000;
+var HISTORY_MAX = 90; /* 90 samples x 10s = 15 minutes of live chart */
 
 var state = {
   ports: { sha256: 3333, yespower: 3334, ethash: 3335 },
   schemes: {},
   payments: null,
-  blockStatus: {},
+  poolAddress: null,
   startedAtMs: null,
   uptimeBaseSeconds: null,
   uptimeFetchedAtMs: null,
-  bannerDismissed: false
+  history: { sha256: [], yespower: [], ethash: [] },
+  openBreakdowns: {}
 };
 
-/* ---------- formatting helpers ---------- */
+/* ---------------- helpers ---------------- */
+
+function el(tag, cls, text) {
+  var node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text != null) node.textContent = text;
+  return node;
+}
 
 function asNumber(value) {
   var n = Number(value);
-  return Number.isFinite(n) ? n : 0;
+  return Number.isFinite(n) ? n : null;
+}
+
+function fetchJson(url) {
+  return fetch(url, { headers: { 'Accept': 'application/json' } }).then(function (r) {
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
+  });
+}
+
+var HASH_UNITS = ['H/s', 'kH/s', 'MH/s', 'GH/s', 'TH/s', 'PH/s', 'EH/s'];
+
+function splitHashrate(value) {
+  var v = asNumber(value);
+  if (v == null || v <= 0) return { num: '0', unit: 'H/s' };
+  var i = 0;
+  while (v >= 1000 && i < HASH_UNITS.length - 1) { v /= 1000; i++; }
+  var num = v >= 100 ? v.toFixed(0) : (v >= 10 ? v.toFixed(1) : v.toFixed(2));
+  return { num: num, unit: HASH_UNITS[i] };
 }
 
 function formatHashrate(value) {
-  var units = ['H/s', 'kH/s', 'MH/s', 'GH/s', 'TH/s', 'PH/s'];
-  var n = asNumber(value);
-  var idx = 0;
-  while (n >= 1000 && idx < units.length - 1) {
-    n = n / 1000;
-    idx += 1;
-  }
-  var text = idx === 0 ? String(Math.round(n)) : n.toFixed(2).replace(/\.?0+$/, '');
-  return text + ' ' + units[idx];
+  var s = splitHashrate(value);
+  return s.num + ' ' + s.unit;
 }
 
 function formatCount(value) {
-  return String(Math.round(asNumber(value))).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  var v = asNumber(value);
+  if (v == null) return '—';
+  return Math.round(v).toLocaleString('en-US');
 }
 
 function formatItcFromSat(sat) {
-  var itc = asNumber(sat) / 1e8;
-  return itc.toFixed(8).replace(/\.?0+$/, '') + ' ITC';
-}
-
-function formatItcValue(itc) {
-  var n = asNumber(itc);
-  return n.toFixed(8).replace(/\.?0+$/, '') + ' ITC';
+  var v = asNumber(sat);
+  if (v == null) return '—';
+  var coins = v / 1e8;
+  return coins.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 8 }) + ' ITC';
 }
 
 function toDate(value) {
-  if (value === null || value === undefined || value === '') return null;
-  var d;
-  if (typeof value === 'number') {
-    // Unix seconds vs milliseconds: seconds are < 1e11 for any realistic date.
-    d = new Date(value < 1e11 ? value * 1000 : value);
-  } else {
-    d = new Date(value);
+  if (value == null) return null;
+  var n = Number(value);
+  if (Number.isFinite(n)) {
+    /* collector times are ms; store times are seconds */
+    return new Date(n < 1e12 ? n * 1000 : n);
   }
-  return Number.isNaN(d.getTime()) ? null : d;
+  var d = new Date(value);
+  return isNaN(d.getTime()) ? null : d;
 }
 
 function formatRelativeTime(value) {
   var d = toDate(value);
   if (!d) return '—';
-  var diffSeconds = Math.floor((Date.now() - d.getTime()) / 1000);
-  if (diffSeconds < 0) return 'just now';
-  if (diffSeconds < 10) return 'just now';
-  if (diffSeconds < 60) return diffSeconds + 's ago';
-  var minutes = Math.floor(diffSeconds / 60);
-  if (minutes < 60) return minutes + 'm ago';
-  var hours = Math.floor(minutes / 60);
-  if (hours < 24) return hours + 'h ago';
-  var days = Math.floor(hours / 24);
-  return days + 'd ago';
+  var secs = Math.max(0, Math.floor((Date.now() - d.getTime()) / 1000));
+  if (secs < 5) return 'just now';
+  if (secs < 60) return secs + 's ago';
+  var mins = Math.floor(secs / 60);
+  if (mins < 60) return mins + 'm ago';
+  var hrs = Math.floor(mins / 60);
+  if (hrs < 24) return hrs + 'h ago';
+  return Math.floor(hrs / 24) + 'd ago';
 }
 
 function formatDateTime(value) {
   var d = toDate(value);
   if (!d) return '—';
-  return d.toLocaleString();
+  return d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
 function formatUptime(totalSeconds) {
-  var s = Math.max(0, Math.floor(asNumber(totalSeconds)));
-  var days = Math.floor(s / 86400);
-  var hours = Math.floor((s % 86400) / 3600);
-  var minutes = Math.floor((s % 3600) / 60);
-  var seconds = s % 60;
-  var parts = [];
-  if (days > 0) parts.push(days + 'd');
-  parts.push(hours + 'h');
-  parts.push(minutes + 'm');
-  parts.push(seconds + 's');
-  return parts.join(' ');
+  var s = Math.max(0, Math.floor(totalSeconds || 0));
+  var d = Math.floor(s / 86400); s -= d * 86400;
+  var h = Math.floor(s / 3600); s -= h * 3600;
+  var m = Math.floor(s / 60); s -= m * 60;
+  if (d > 0) return d + 'd ' + h + 'h';
+  if (h > 0) return h + 'h ' + m + 'm';
+  if (m > 0) return m + 'm ' + s + 's';
+  return s + 's';
 }
 
 function truncateHash(hash) {
-  var h = String(hash === null || hash === undefined ? '' : hash);
-  if (h.length <= 20) return h;
-  return h.slice(0, 10) + '…' + h.slice(-8);
+  if (!hash) return '—';
+  var h = String(hash);
+  return h.length > 20 ? h.slice(0, 10) + '…' + h.slice(-8) : h;
 }
 
-function normalizeAlgo(value) {
-  var a = String(value || '').toLowerCase();
-  return ALGOS.indexOf(a) !== -1 ? a : a;
+function normalizeAlgo(a) {
+  var s = String(a || '').toLowerCase();
+  return ALGO_META[s] ? s : null;
 }
 
-/* ---------- DOM helpers ---------- */
+/* ---------------- charts ---------------- */
 
-function el(tag, className, text) {
-  var node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text !== undefined && text !== null) node.textContent = String(text);
-  return node;
-}
-
-function badgeFor(algo) {
-  var a = normalizeAlgo(algo);
-  var meta = ALGO_META[a];
-  var badge = el('span', 'badge badge-' + (ALGOS.indexOf(a) !== -1 ? a : 'sha256'));
-  badge.textContent = meta ? meta.label : String(algo || 'unknown');
-  return badge;
-}
-
-function field(card, name) {
-  return card.querySelector('[data-field="' + name + '"]');
-}
-
-/* ---------- rendering: stats ---------- */
-
-function renderStats(stats) {
-  if (!stats || typeof stats !== 'object') return;
-
-  var uptimeSeconds = asNumber(stats.uptimeSeconds);
-  if (stats.startedAt !== null && stats.startedAt !== undefined) {
-    var started = toDate(stats.startedAt);
-    if (started) state.startedAtMs = started.getTime();
+function drawSeries(canvas, seriesList) {
+  if (!canvas || !canvas.clientWidth) return;
+  var dpr = window.devicePixelRatio || 1;
+  var w = canvas.clientWidth, h = canvas.clientHeight;
+  if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+    canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
   }
-  if (uptimeSeconds > 0 || state.uptimeBaseSeconds === null) {
-    state.uptimeBaseSeconds = uptimeSeconds;
-    state.uptimeFetchedAtMs = Date.now();
-  }
-  updateUptime();
-
-  var algos = (stats.algos && typeof stats.algos === 'object') ? stats.algos : {};
-  ALGOS.forEach(function (algo) {
-    var card = document.querySelector('[data-algo-card="' + algo + '"]');
-    if (!card) return;
-    var data = (algos[algo] && typeof algos[algo] === 'object') ? algos[algo] : {};
-    var hashrate = asNumber(data.hashrate);
-    var accepted = asNumber(data.sharesAccepted);
-    var rejected = asNumber(data.sharesRejected);
-    var workers = asNumber(data.workers);
-
-    field(card, 'hashrate').textContent = formatHashrate(hashrate);
-    field(card, 'workers').textContent = formatCount(workers);
-    field(card, 'shares-accepted').textContent = formatCount(accepted);
-    field(card, 'shares-rejected').textContent = formatCount(rejected);
-
-    var waiting = field(card, 'waiting');
-    if (waiting) waiting.hidden = !(hashrate === 0 && accepted === 0 && workers === 0);
-
-    var lastBlockEl = field(card, 'last-block');
-    var lb = data.lastBlock;
-    if (lb && typeof lb === 'object') {
-      var heightText = lb.height !== null && lb.height !== undefined ? '#' + formatCount(lb.height) : 'Block';
-      var when = lb.time !== null && lb.time !== undefined ? ' · ' + formatRelativeTime(lb.time) : '';
-      lastBlockEl.textContent = heightText + when;
-      lastBlockEl.title = lb.hash ? String(lb.hash) : '';
-    } else {
-      lastBlockEl.textContent = 'No blocks yet';
-      lastBlockEl.title = '';
-    }
+  var ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  seriesList.forEach(function (series) {
+    var pts = series.points;
+    if (!pts || pts.length < 2) return;
+    var max = 0;
+    pts.forEach(function (p) { if (p.v > max) max = p.v; });
+    if (max <= 0) return;
+    var minT = pts[0].t, maxT = pts[pts.length - 1].t;
+    if (maxT === minT) return;
+    function X(t) { return ((t - minT) / (maxT - minT)) * (w - 4) + 2; }
+    function Y(v) { return h - 4 - (v / max) * (h - 12); }
+    ctx.beginPath();
+    pts.forEach(function (p, i) { if (i === 0) ctx.moveTo(X(p.t), Y(p.v)); else ctx.lineTo(X(p.t), Y(p.v)); });
+    ctx.strokeStyle = series.color; ctx.lineWidth = 1.8; ctx.stroke();
+    ctx.lineTo(X(maxT), h); ctx.lineTo(X(minT), h); ctx.closePath();
+    ctx.globalAlpha = 0.10; ctx.fillStyle = series.color; ctx.fill(); ctx.globalAlpha = 1;
   });
+}
+
+function pushHistory(algo, value) {
+  var arr = state.history[algo];
+  arr.push({ t: Date.now(), v: Math.max(0, value || 0) });
+  while (arr.length > HISTORY_MAX) arr.shift();
+}
+
+function drawCharts() {
+  drawSeries(document.getElementById('hero-chart'), ALGOS.map(function (a) {
+    return { color: ALGO_META[a].color, points: state.history[a] };
+  }));
+  ALGOS.forEach(function (a) {
+    var c = document.querySelector('canvas.algo-spark[data-algo="' + a + '"]');
+    if (c) drawSeries(c, [{ color: ALGO_META[a].color, points: state.history[a] }]);
+  });
+}
+
+/* ---------------- rendering: chrome ---------------- */
+
+function setApiStatus(ok, text) {
+  var dot = document.getElementById('api-dot');
+  dot.className = 'dot ' + (ok ? 'on' : 'off');
+  document.getElementById('api-status-text').textContent = text;
 }
 
 function currentUptimeSeconds() {
-  if (state.startedAtMs) {
-    return Math.max(0, (Date.now() - state.startedAtMs) / 1000);
-  }
-  if (state.uptimeBaseSeconds !== null && state.uptimeFetchedAtMs) {
-    return state.uptimeBaseSeconds + (Date.now() - state.uptimeFetchedAtMs) / 1000;
-  }
-  return null;
+  if (state.uptimeBaseSeconds == null || state.uptimeFetchedAtMs == null) return null;
+  return state.uptimeBaseSeconds + Math.max(0, (Date.now() - state.uptimeFetchedAtMs) / 1000);
 }
 
 function updateUptime() {
-  var node = document.getElementById('uptime');
-  if (!node) return;
-  var seconds = currentUptimeSeconds();
-  node.textContent = seconds === null ? '—' : formatUptime(seconds);
+  var s = currentUptimeSeconds();
+  document.getElementById('uptime-chip').textContent = 'uptime ' + (s == null ? '—' : formatUptime(s));
 }
 
-/* ---------- rendering: workers ---------- */
+/* ---------------- rendering: hero + algo cards ---------------- */
 
-function renderWorkers(workers) {
-  var tbody = document.getElementById('workers-body');
-  var empty = document.getElementById('workers-empty');
-  if (!tbody) return;
-  var list = Array.isArray(workers) ? workers : [];
-
-  while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
-  if (empty) empty.hidden = list.length > 0;
-
-  list.forEach(function (w) {
-    var item = (w && typeof w === 'object') ? w : {};
-    var row = document.createElement('tr');
-
-    var nameCell = el('td');
-    nameCell.appendChild(el('span', 'worker-name', item.worker || 'unknown'));
-    row.appendChild(nameCell);
-
-    var algoCell = el('td');
-    algoCell.appendChild(badgeFor(item.algo));
-    row.appendChild(algoCell);
-
-    row.appendChild(el('td', null, formatHashrate(item.hashrate)));
-
-    var sharesText = formatCount(item.shares) + ' / ' + formatCount(item.invalidShares);
-    row.appendChild(el('td', null, sharesText));
-
-    var connected = item.connected === true || item.connected === 1 || item.connected === 'true';
-    var statusCell = el('td');
-    statusCell.appendChild(el('span', 'status-pill ' + (connected ? 'status-connected' : 'status-offline'), connected ? '● Connected' : '○ Offline'));
-    row.appendChild(statusCell);
-
-    var lastCell = el('td', null, item.lastShareAt ? formatRelativeTime(item.lastShareAt) : '—');
-    if (item.lastShareAt) lastCell.title = formatDateTime(item.lastShareAt);
-    row.appendChild(lastCell);
-
-    tbody.appendChild(row);
+function renderStats(stats) {
+  var algos = (stats && stats.algos) || {};
+  var totalHash = 0, totalWorkers = 0, totalBlocks = 0, acc = 0, rej = 0;
+  ALGOS.forEach(function (a) {
+    var s = algos[a] || {};
+    var hr = asNumber(s.hashrate) || 0;
+    totalHash += hr;
+    totalWorkers += asNumber(s.workers) || 0;
+    totalBlocks += asNumber(s.blocksFound) || 0;
+    acc += asNumber(s.sharesAccepted) || 0;
+    rej += asNumber(s.sharesRejected) || 0;
+    pushHistory(a, hr);
   });
-}
-
-/* ---------- rendering: blocks ---------- */
-
-function renderBlocks(blocks) {
-  var tbody = document.getElementById('blocks-body');
-  var empty = document.getElementById('blocks-empty');
-  var list = Array.isArray(blocks) ? blocks : [];
-  if (tbody) {
-    while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
-    list.forEach(function (b) {
-      var item = (b && typeof b === 'object') ? b : {};
-      var key = String(item.algo || '').toLowerCase() + ':' + String(item.height);
-      var status = item.status || state.blockStatus[key] || null;
-      var row = document.createElement('tr');
-      row.appendChild(el('td', 'block-height', item.height !== null && item.height !== undefined ? '#' + formatCount(item.height) : '—'));
-      var algoCell = el('td');
-      algoCell.appendChild(badgeFor(item.algo));
-      row.appendChild(algoCell);
-      var hashCell = el('td', 'block-hash mono', truncateHash(item.hash));
-      if (item.hash) hashCell.title = String(item.hash);
-      row.appendChild(hashCell);
-      var timeCell = el('td', null, formatRelativeTime(item.time));
-      timeCell.title = formatDateTime(item.time);
-      row.appendChild(timeCell);
-      var statusCell = el('td');
-      if (status) {
-        statusCell.appendChild(el('span', 'status-pill dist-' + String(status).toLowerCase(), String(status)));
-      } else {
-        statusCell.textContent = '—';
-      }
-      row.appendChild(statusCell);
-      tbody.appendChild(row);
-    });
+  var hero = document.getElementById('hero-hashrate');
+  hero.textContent = '';
+  var split = splitHashrate(totalHash);
+  hero.appendChild(document.createTextNode(split.num));
+  var unit = el('span', 'unit', split.unit);
+  hero.appendChild(unit);
+  document.getElementById('hero-workers').textContent = formatCount(totalWorkers);
+  document.getElementById('hero-blocks').textContent = formatCount(totalBlocks);
+  document.getElementById('hero-shares').textContent = formatCount(acc);
+  var tot = acc + rej;
+  document.getElementById('hero-reject').textContent = tot > 0 ? (100 * rej / tot).toFixed(2) + '%' : '0%';
+  if (stats && stats.startedAt != null) {
+    var st = toDate(stats.startedAt);
+    if (st) state.startedAtMs = st.getTime();
   }
-  if (empty) empty.hidden = list.length > 0;
-}
-
-function renderStoreBlocks(blocks) {
-  state.blockStatus = {};
-  (Array.isArray(blocks) ? blocks : []).forEach(function (b) {
-    if (!b || typeof b !== 'object') return;
-    state.blockStatus[String(b.algo || '').toLowerCase() + ':' + String(b.height)] = b.status || 'pending';
-  });
-}
-
-/* ---------- rendering: payouts + miner lookup ---------- */
-
-function renderSchemeBadges() {
-  ALGOS.forEach(function (algo) {
-    var card = document.querySelector('[data-algo-card="' + algo + '"]');
-    if (!card) return;
-    var badge = field(card, 'scheme');
-    if (!badge) return;
-    var scheme = state.schemes[algo];
-    badge.textContent = scheme ? String(scheme).toUpperCase() : '—';
-    badge.className = 'badge badge-scheme' + (scheme ? ' scheme-' + String(scheme).toLowerCase() : '');
-  });
-}
-
-/* Payout batch status cell: dry-runs show their PSBT stage, live
- * batches show the txid once sent (or the stage they are stuck at). */
-function payoutStatusText(item) {
-  if (item.dryRun) return item.stage ? 'dry-run · psbt ' + item.stage : 'dry-run';
-  if (item.txid) return truncateHash(item.txid);
-  if (item.stage) return 'psbt ' + item.stage;
-  return '—';
-}
-
-function renderPayouts(data) {
-  var pool = (data && typeof data === 'object' && data.pool && typeof data.pool === 'object')
-    ? data.pool : (state.payments || {});
-  var feeEl = document.getElementById('payouts-fee');
-  var minEl = document.getElementById('payouts-min');
-  var confEl = document.getElementById('payouts-confirmations');
-  var modeEl = document.getElementById('payouts-mode');
-  if (feeEl) feeEl.textContent = pool.feePercent !== null && pool.feePercent !== undefined ? String(pool.feePercent) + '%' : '—';
-  if (minEl) {
-    // Pool config denominates minPayout in ITC coins (see api/server.js
-    // paymentsSummary); prefer the explicit Itc/Sat pair when present.
-    if (pool.minPayoutItc !== null && pool.minPayoutItc !== undefined) {
-      minEl.textContent = String(pool.minPayoutItc) + ' ITC' +
-        (pool.minPayoutSat !== null && pool.minPayoutSat !== undefined
-          ? ' (' + formatCount(pool.minPayoutSat) + ' sat)' : '');
-    } else if (pool.minPayout !== null && pool.minPayout !== undefined) {
-      minEl.textContent = String(pool.minPayout) + ' ITC';
-    } else {
-      minEl.textContent = '—';
-    }
+  if (stats && stats.uptimeSeconds != null) {
+    state.uptimeBaseSeconds = asNumber(stats.uptimeSeconds);
+    state.uptimeFetchedAtMs = Date.now();
   }
-  if (confEl) confEl.textContent = pool.confirmations !== null && pool.confirmations !== undefined ? formatCount(pool.confirmations) : '—';
-  if (modeEl) {
-    if (pool.dryRun === true) {
-      modeEl.textContent = 'DRY-RUN — no real payouts';
-      modeEl.className = 'badge badge-mode badge-dryrun';
-    } else if (pool.dryRun === false) {
-      modeEl.textContent = 'LIVE';
-      modeEl.className = 'badge badge-mode badge-live';
-    } else {
-      modeEl.textContent = 'Not configured';
-      modeEl.className = 'badge badge-mode';
-    }
-  }
-  var tbody = document.getElementById('payouts-body');
-  var empty = document.getElementById('payouts-empty');
-  if (!tbody) return;
-  var list = (data && Array.isArray(data.payouts)) ? data.payouts : [];
-  while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
-  if (empty) empty.hidden = list.length > 0;
-  list.slice(0, 20).forEach(function (batch) {
-    var item = (batch && typeof batch === 'object') ? batch : {};
-    var row = document.createElement('tr');
-    var timeCell = el('td', null, formatRelativeTime(item.time));
-    timeCell.title = formatDateTime(item.time);
-    row.appendChild(timeCell);
-    var algoCell = el('td');
-    algoCell.appendChild(badgeFor(item.algo));
-    row.appendChild(algoCell);
-    var totalSat = item.totalSat !== undefined ? item.totalSat
-      : Object.keys(item.amounts || {}).reduce(function (sum, k) { return sum + asNumber(item.amounts[k]); }, 0);
-    row.appendChild(el('td', null, formatItcFromSat(totalSat)));
-    var miners = item.minersPaid !== undefined ? item.minersPaid : Object.keys(item.amounts || {}).length;
-    row.appendChild(el('td', null, formatCount(miners)));
-    row.appendChild(el('td', 'mono', payoutStatusText(item)));
-    tbody.appendChild(row);
-  });
+  renderAlgoCards(algos);
+  drawCharts();
 }
 
-function renderMiner(data) {
-  var notFound = document.getElementById('miner-notfound');
-  var empty = document.getElementById('miner-empty');
-  var result = document.getElementById('miner-result');
-  var tbody = document.getElementById('miner-body');
-  var totals = document.getElementById('miner-totals');
-  if (notFound) notFound.hidden = true;
-  if (empty) empty.hidden = true;
-  if (result) result.hidden = false;
-  if (!tbody || !data) return;
-  while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
-  var algos = (data.algos && typeof data.algos === 'object') ? data.algos : {};
-  Object.keys(algos).forEach(function (algo) {
-    var a = algos[algo] || {};
-    if (!asNumber(a.shares) && !asNumber(a.pendingSat) && !asNumber(a.paidSat)) return;
-    var row = document.createElement('tr');
-    var algoCell = el('td');
-    algoCell.appendChild(badgeFor(algo));
-    row.appendChild(algoCell);
-    row.appendChild(el('td', null, formatCount(a.shares)));
-    row.appendChild(el('td', null, formatHashrate(a.hashrateEstimate)));
-    row.appendChild(el('td', null, a.lastShareAt ? formatRelativeTime(a.lastShareAt) : '—'));
-    row.appendChild(el('td', null, formatItcValue(a.pendingItc) + ' (' + formatCount(a.pendingSat) + ' sat)'));
-    row.appendChild(el('td', null, formatItcValue(a.paidItc) + ' (' + formatCount(a.paidSat) + ' sat)'));
-    tbody.appendChild(row);
-  });
-  if (totals && data.totals) {
-    totals.textContent = formatCount(data.totals.shares) + ' shares · ' +
-      formatHashrate(data.totals.hashrateEstimate) + ' · pending ' +
-      formatItcValue(data.totals.pendingItc) + ' · paid ' + formatItcValue(data.totals.paidItc);
-  }
+function schemeBadge(algo) {
+  var scheme = state.schemes[algo] || 'solo';
+  var b = el('span', 'badge ' + (scheme === 'solo' ? 'solo' : 'group'), scheme);
+  return b;
 }
 
-function renderMinerNotFound() {
-  var notFound = document.getElementById('miner-notfound');
-  var empty = document.getElementById('miner-empty');
-  var result = document.getElementById('miner-result');
-  if (notFound) notFound.hidden = false;
-  if (empty) empty.hidden = true;
-  if (result) result.hidden = true;
+function connectUrl(algo) {
+  var host = window.location.hostname || 'pool.interchained.org';
+  return 'stratum+tcp://' + host + ':' + state.ports[algo];
 }
 
-function lookupMiner(address) {
-  if (!address) return;
-  fetch('/api/miner/' + encodeURIComponent(address), { headers: { Accept: 'application/json' }, cache: 'no-store' })
-    .then(function (res) {
-      if (res.status === 404) { renderMinerNotFound(); return null; }
-      if (!res.ok) throw new Error('miner lookup ' + res.status);
-      return res.json();
-    })
-    .then(function (data) { if (data) renderMiner(data); })
-    .catch(function () { renderMinerNotFound(); });
-}
-
-/* ---------- rendering: connection panel ---------- */
-
-function minerExample(algo, host, port) {
-  var url = 'stratum+tcp://' + host + ':' + port;
-  if (algo === 'sha256') {
-    return 'ASIC dashboard — Pool URL: ' + url + '  ·  Worker: YOUR_ITC_ADDRESS.asic1  ·  Password: x';
-  }
-  if (algo === 'yespower') {
-    return 'cpuminer-opt -a yespower -o ' + url + ' -u YOUR_ITC_ADDRESS.cpu1 -p x';
-  }
-  return 'ethminer -U -P stratum+tcp://YOUR_ITC_ADDRESS.gpu1:x@' + host + ':' + port;
-}
-
-function makeCopyRow(text, isExample) {
-  var wrap = el('div', 'copy-row');
-  var code = el('code', 'copy-text' + (isExample ? ' example' : ''), text);
-  var btn = el('button', 'copy-btn', 'Copy');
+function makeCopyRow(algo) {
+  var row = el('div', 'connect-row');
+  row.appendChild(el('span', 'connect-url mono', connectUrl(algo)));
+  var btn = el('button', 'copy-btn', 'COPY');
   btn.type = 'button';
-  btn.setAttribute('aria-label', 'Copy to clipboard');
   btn.addEventListener('click', function () {
+    var url = connectUrl(algo);
     function done() {
-      btn.textContent = 'Copied';
+      btn.textContent = 'COPIED';
       btn.classList.add('copied');
-      setTimeout(function () {
-        btn.textContent = 'Copy';
-        btn.classList.remove('copied');
-      }, 1600);
+      setTimeout(function () { btn.textContent = 'COPY'; btn.classList.remove('copied'); }, 1600);
     }
     if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(text).then(done, done);
-    } else {
-      // Offline / non-secure fallback: select-free textarea copy.
-      var ta = document.createElement('textarea');
-      ta.value = text;
-      ta.style.position = 'fixed';
-      ta.style.opacity = '0';
-      document.body.appendChild(ta);
-      ta.select();
-      try { document.execCommand('copy'); } catch (err) { /* clipboard unavailable */ }
-      document.body.removeChild(ta);
-      done();
+      navigator.clipboard.writeText(url).then(done, done);
+    } else { done(); }
+  });
+  row.appendChild(btn);
+  return row;
+}
+
+function algoRow(k, vNode) {
+  var row = el('div', 'algo-row');
+  row.appendChild(el('span', 'k', k));
+  var v = el('span', 'v');
+  if (typeof vNode === 'string') v.textContent = vNode; else v.appendChild(vNode);
+  row.appendChild(v);
+  return row;
+}
+
+function renderAlgoCards(algos) {
+  var grid = document.getElementById('algo-grid');
+  grid.textContent = '';
+  ALGOS.forEach(function (a) {
+    var meta = ALGO_META[a];
+    var s = algos[a] || {};
+    var card = el('div', 'algo-card');
+    card.setAttribute('data-algo', a);
+    var head = el('div', 'algo-head');
+    head.appendChild(el('span', 'algo-name', meta.label));
+    head.appendChild(el('span', 'algo-kind', meta.kind));
+    card.appendChild(head);
+    var hr = splitHashrate(asNumber(s.hashrate) || 0);
+    var hrNode = el('div', 'algo-hashrate mono');
+    hrNode.appendChild(document.createTextNode(hr.num));
+    hrNode.appendChild(el('span', 'unit', hr.unit));
+    card.appendChild(hrNode);
+    var spark = document.createElement('canvas');
+    spark.className = 'algo-spark';
+    spark.setAttribute('data-algo', a);
+    card.appendChild(spark);
+    var rows = el('div', 'algo-rows');
+    rows.appendChild(algoRow('Miners', formatCount(s.workers)));
+    rows.appendChild(algoRow('Shares', formatCount(s.sharesAccepted) + ' / ' + formatCount(s.sharesRejected) + ' rej'));
+    rows.appendChild(algoRow('Blocks found', formatCount(s.blocksFound)));
+    var lb = s.lastBlock;
+    rows.appendChild(algoRow('Last block', lb && lb.height != null ? '#' + formatCount(lb.height) + ' · ' + formatRelativeTime(lb.time) : '—'));
+    var schemeRow = algoRow('Scheme', '');
+    schemeRow.querySelector('.v').appendChild(schemeBadge(a));
+    rows.appendChild(schemeRow);
+    rows.appendChild(algoRow('Stratum port', String(state.ports[a])));
+    card.appendChild(rows);
+    card.appendChild(makeCopyRow(a));
+    grid.appendChild(card);
+  });
+  drawCharts();
+}
+
+/* ---------------- rendering: workers ---------------- */
+
+function renderWorkers(workers) {
+  var tbody = document.querySelector('#workers-table tbody');
+  tbody.textContent = '';
+  var list = Array.isArray(workers) ? workers.slice() : [];
+  list.sort(function (x, y) { return (asNumber(y.hashrate) || 0) - (asNumber(x.hashrate) || 0); });
+  var online = list.filter(function (w) { return w.connected; }).length;
+  document.getElementById('workers-note').textContent = list.length ? online + ' online · ' + list.length + ' known' : '';
+  document.getElementById('workers-empty').classList.toggle('hidden', list.length > 0);
+  document.getElementById('workers-table').classList.toggle('hidden', list.length === 0);
+  list.forEach(function (w) {
+    var algo = normalizeAlgo(w.algo);
+    var tr = document.createElement('tr');
+    var nameTd = el('td', 'worker-name', String(w.worker || '—'));
+    nameTd.title = String(w.worker || '');
+    tr.appendChild(nameTd);
+    var algoTd = document.createElement('td');
+    if (algo) {
+      var chip = el('span', 'algo-chip ' + algo);
+      algoTd.appendChild(chip);
+      algoTd.appendChild(document.createTextNode(ALGO_META[algo].label));
+    } else { algoTd.textContent = '—'; }
+    tr.appendChild(algoTd);
+    tr.appendChild(el('td', 'num', formatHashrate(w.hashrate)));
+    tr.appendChild(el('td', 'num', formatCount(w.shares)));
+    tr.appendChild(el('td', 'num', formatCount(w.invalidShares)));
+    tr.appendChild(el('td', null, formatRelativeTime(w.lastShareAt)));
+    var statusTd = document.createElement('td');
+    statusTd.appendChild(el('span', 'status-dot ' + (w.connected ? 'on' : 'off')));
+    tr.appendChild(statusTd);
+    tbody.appendChild(tr);
+  });
+}
+
+/* ---------------- rendering: blocks ---------------- */
+
+function renderBlocks(collectorBlocks, storeBlocks) {
+  var list = document.getElementById('blocks-list');
+  list.textContent = '';
+  var storeByHeight = {};
+  (Array.isArray(storeBlocks) ? storeBlocks : []).forEach(function (b) {
+    if (b && b.height != null) storeByHeight[String(b.height)] = b;
+  });
+  var blocks = (Array.isArray(collectorBlocks) ? collectorBlocks : []).slice(0, 30);
+  document.getElementById('blocks-empty').classList.toggle('hidden', blocks.length > 0);
+  var maxHeight = null;
+  blocks.forEach(function (b) {
+    var algo = normalizeAlgo(b.algo);
+    var store = b.height != null ? storeByHeight[String(b.height)] : null;
+    if (b.height != null && (maxHeight == null || Number(b.height) > maxHeight)) maxHeight = Number(b.height);
+    var row = el('div', 'block-row');
+    var left = document.createElement('div');
+    var h = el('div', 'block-height mono', b.height != null ? '#' + formatCount(b.height) : '—');
+    left.appendChild(h);
+    if (algo) {
+      var chipWrap = document.createElement('div');
+      var chip = el('span', 'algo-chip ' + algo);
+      chipWrap.appendChild(chip);
+      chipWrap.appendChild(el('span', null, ALGO_META[algo].label));
+      chipWrap.style.fontSize = '12px';
+      chipWrap.style.color = 'var(--muted)';
+      left.appendChild(chipWrap);
     }
+    row.appendChild(left);
+    var mid = document.createElement('div');
+    mid.appendChild(el('div', 'block-hash', truncateHash(b.hash)));
+    mid.appendChild(el('div', 'block-meta', formatRelativeTime(b.time) + ' · ' + formatDateTime(b.time)));
+    row.appendChild(mid);
+    var right = el('div', 'block-right');
+    if (store && store.rewardItc != null) right.appendChild(el('div', 'block-reward', Number(store.rewardItc).toFixed(4) + ' ITC'));
+    var statusText = store && store.status ? String(store.status) : 'found';
+    var status = el('div', 'block-status' + (statusText === 'confirmed' || statusText === 'settled' ? ' confirmed' : ''), statusText);
+    right.appendChild(status);
+    row.appendChild(right);
+    list.appendChild(row);
   });
-  wrap.appendChild(code);
-  wrap.appendChild(btn);
-  return wrap;
+  if (maxHeight != null) document.getElementById('height-chip').textContent = '⛓ #' + formatCount(maxHeight);
 }
 
-function renderConnection() {
-  var container = document.getElementById('connection-list');
-  if (!container) return;
-  var host = window.location.hostname || 'localhost';
+/* ---------------- rendering: fairness ---------------- */
 
-  while (container.firstChild) container.removeChild(container.firstChild);
-
-  ALGOS.forEach(function (algo) {
-    var meta = ALGO_META[algo];
-    var port = state.ports[algo] || meta.defaultPort;
-    var card = el('article', 'connection-card');
-
-    var heading = el('h3');
-    heading.appendChild(badgeFor(algo));
-    heading.appendChild(el('span', null, meta.label + ' · Port ' + port));
-    card.appendChild(heading);
-
-    card.appendChild(el('span', 'copy-label', 'Stratum URL'));
-    card.appendChild(makeCopyRow('stratum+tcp://' + host + ':' + port, false));
-
-    card.appendChild(el('span', 'copy-label', 'Example miner'));
-    card.appendChild(makeCopyRow(minerExample(algo, host, port), true));
-
-    container.appendChild(card);
-  });
-}
-
-function renderConfig(config) {
-  if (!config || typeof config !== 'object') {
-    renderConnection();
-    renderSchemeBadges();
-    renderPayouts(null);
-    return;
-  }
-  // Accept every shape the API has used: algos as a map
-  // ({algo:{algo|name, stratumPort|port, scheme}}), algoList, or an
-  // algos array (phase-1 UI expectation).
-  var entries = [];
-  if (Array.isArray(config.algoList)) entries = entries.concat(config.algoList);
-  if (Array.isArray(config.algos)) entries = entries.concat(config.algos);
-  else if (config.algos && typeof config.algos === 'object') {
-    Object.keys(config.algos).forEach(function (key) {
-      var e = config.algos[key] || {};
-      entries.push(Object.assign({ algo: e.algo || e.name || key }, e));
-    });
-  }
-  if (config.stratumPorts && typeof config.stratumPorts === 'object') {
-    Object.keys(config.stratumPorts).forEach(function (key) {
-      entries.push({ algo: key, stratumPort: config.stratumPorts[key] });
-    });
-  }
-  entries.forEach(function (entry) {
-    if (!entry || typeof entry !== 'object') return;
-    var name = normalizeAlgo(entry.algo || entry.name || entry.algorithm);
-    if (ALGOS.indexOf(name) === -1) return;
-    var port = entry.stratumPort || entry.port;
-    if (port) state.ports[name] = asNumber(port) || state.ports[name];
-    if (entry.scheme) state.schemes[name] = String(entry.scheme).toLowerCase();
-  });
-  if (config.payments && typeof config.payments === 'object') {
-    state.payments = config.payments;
-  }
-  renderConnection();
-  renderSchemeBadges();
-  renderPayouts(null);
-}
-
-/* ---------- rendering: fairness (phase 3) ---------- */
-
-function formatSatCoins(sat) {
-  return formatItcFromSat(sat) + ' (' + formatCount(sat) + ' sat)';
+function fairStat(value, label) {
+  var box = el('div', 'fair-stat');
+  box.appendChild(el('div', 'v', value));
+  box.appendChild(el('div', 'k', label));
+  return box;
 }
 
 function renderReconcile(rec) {
-  var summary = document.getElementById('reconcile-summary');
-  var equation = document.getElementById('reconcile-equation');
-  var list = document.getElementById('reconcile-discrepancies');
-  if (!summary || !rec || typeof rec !== 'object') return;
+  var verdict = document.getElementById('reconcile-verdict');
+  var statsBox = document.getElementById('fairness-stats');
+  var eq = document.getElementById('reconcile-equation');
+  statsBox.textContent = '';
+  eq.textContent = '';
+  if (!rec || typeof rec !== 'object') {
+    verdict.textContent = 'unavailable';
+    verdict.className = 'verdict';
+    return;
+  }
   var agg = rec.aggregate || {};
-  var errors = (rec.discrepancies || []).filter(function (d) { return d.severity !== 'notice'; });
-  summary.textContent = rec.balanced
-    ? 'Reconciliation: BALANCED across ' + formatCount(rec.settledBlocks) + ' settled block(s).'
-    : 'Reconciliation: ' + errors.length + ' discrepancy(ies) — the books do NOT balance; see below.';
-  summary.className = rec.balanced ? 'reconcile-ok' : 'reconcile-bad';
-  if (equation) {
-    equation.hidden = false;
-    equation.textContent = 'Rewards in ' + formatSatCoins(agg.rewardInSat) +
-      ' = payouts ' + formatSatCoins(agg.payoutsSat) +
-      ' + fees ' + formatSatCoins(agg.feeSat) +
-      ' + carry-over ' + formatSatCoins(agg.carryOverDeltaSat) +
-      (agg.undistributedSat ? ' + undistributed ' + formatSatCoins(agg.undistributedSat) : '');
+  var errors = (rec.discrepancies || []).filter(function (d) { return d && d.severity === 'error'; }).length;
+  if (rec.balanced && errors === 0) {
+    verdict.textContent = '✓ Books balanced';
+    verdict.className = 'verdict ok';
+  } else {
+    verdict.textContent = '⚠ ' + errors + ' discrepancies';
+    verdict.className = 'verdict bad';
   }
-  if (list) {
-    while (list.firstChild) list.removeChild(list.firstChild);
-    (rec.discrepancies || []).forEach(function (d) {
-      list.appendChild(el('li', null, (d.kind || 'discrepancy') + ': ' + (d.message || '')));
-    });
-    list.hidden = !(rec.discrepancies || []).length;
+  statsBox.appendChild(fairStat(formatCount(rec.settledBlocks), 'settled blocks'));
+  statsBox.appendChild(fairStat(formatItcFromSat(agg.rewardInSat), 'rewards in'));
+  statsBox.appendChild(fairStat(formatItcFromSat(agg.payoutsSat), 'paid out'));
+  statsBox.appendChild(fairStat(formatItcFromSat(agg.feeSat), 'pool fees'));
+  if (agg.equation) {
+    eq.appendChild(document.createTextNode(agg.equation + '  '));
+    var holds = agg.holds === true;
+    eq.appendChild(el('span', holds ? 'holds' : 'fails', holds ? '· HOLDS' : '· FAILS'));
   }
 }
 
-function renderBreakdownList(listData) {
-  var select = document.getElementById('fairness-block-select');
-  var empty = document.getElementById('fairness-empty');
-  if (!select) return;
-  var items = (Array.isArray(listData) ? listData : []).filter(function (b) { return b && b.settled; });
-  var previous = select.value;
-  while (select.firstChild) select.removeChild(select.firstChild);
+function breakdownAmount(m) {
+  var v = asNumber(m.amountSat != null ? m.amountSat : (m.splitSat != null ? m.splitSat : (m.creditedSat != null ? m.creditedSat : m.paidSat)));
+  return v;
+}
+
+function renderBreakdownDetail(container, payload, height) {
+  container.textContent = '';
+  if (!payload || typeof payload !== 'object') {
+    container.appendChild(el('div', 'empty', 'No breakdown available for block ' + height + '.'));
+    return;
+  }
+  var miners = Array.isArray(payload.miners) ? payload.miners : [];
+  var summary = el('div', 'block-meta');
+  var reward = payload.rewardItc != null ? Number(payload.rewardItc).toFixed(4) + ' ITC reward' :
+    (payload.rewardSat != null ? formatItcFromSat(payload.rewardSat) + ' reward' :
+    (payload.reward != null ? formatItcFromSat(payload.reward) + ' reward' : ''));
+  var fee = payload.feeItc != null ? Number(payload.feeItc).toFixed(4) + ' ITC fee' :
+    (payload.feeSat != null ? formatItcFromSat(payload.feeSat) + ' fee' : '');
+  summary.textContent = [reward, fee, miners.length + ' miners'].filter(Boolean).join(' · ');
+  container.appendChild(summary);
+  if (payload.recomputedMatches != null) {
+    var m = el('div', 'block-meta', payload.recomputedMatches
+      ? '✓ Recorded split matches an independent recomputation from the share ledger.'
+      : '⚠ Recorded split does NOT match a recomputation from the share ledger.');
+    m.style.marginTop = '4px';
+    container.appendChild(m);
+  }
+  if (miners.length) {
+    var table = document.createElement('table');
+    var thead = document.createElement('thead');
+    var htr = document.createElement('tr');
+    ['Miner', 'Amount', 'Credited', 'Paid', 'Carry'].forEach(function (label, i) {
+      htr.appendChild(el('th', i > 0 ? 'num' : null, label));
+    });
+    thead.appendChild(htr);
+    table.appendChild(thead);
+    var tbody = document.createElement('tbody');
+    miners.forEach(function (miner) {
+      var tr = document.createElement('tr');
+      var addr = el('td', 'worker-name', String(miner.address || miner.worker || '—'));
+      addr.title = String(miner.address || '');
+      tr.appendChild(addr);
+      var amt = breakdownAmount(miner);
+      tr.appendChild(el('td', 'num', amt != null ? formatItcFromSat(amt) : '—'));
+      tr.appendChild(el('td', 'num', miner.creditedSat != null ? formatItcFromSat(miner.creditedSat) : '—'));
+      tr.appendChild(el('td', 'num', miner.paidSat != null ? formatItcFromSat(miner.paidSat) : '—'));
+      tr.appendChild(el('td', 'num', miner.carrySat != null ? formatItcFromSat(miner.carrySat) : '—'));
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    container.appendChild(table);
+  }
+  var ledgerLink = document.createElement('a');
+  ledgerLink.href = '/api/blocks/' + encodeURIComponent(height) + '/ledger';
+  ledgerLink.textContent = 'Raw share ledger for this block →';
+  ledgerLink.style.fontSize = '12.5px';
+  var linkWrap = el('div');
+  linkWrap.style.marginTop = '10px';
+  linkWrap.appendChild(ledgerLink);
+  container.appendChild(linkWrap);
+}
+
+function renderBreakdowns(list) {
+  var box = document.getElementById('breakdown-list');
+  box.textContent = '';
+  var items = Array.isArray(list) ? list.slice(0, 25) : [];
+  document.getElementById('breakdown-empty').classList.toggle('hidden', items.length > 0);
   items.forEach(function (b) {
-    var opt = document.createElement('option');
-    opt.value = String(b.height) + '|' + String(b.algo || '');
-    opt.textContent = '#' + b.height + ' · ' + String(b.algo || '') + ' · ' + String(b.scheme || '') +
-      ' · ' + formatItcFromSat(b.rewardSat);
-    select.appendChild(opt);
+    var algo = normalizeAlgo(b.algo);
+    var height = b.height;
+    var wrap = el('div', 'breakdown-row');
+    var head = el('button', 'breakdown-head');
+    head.type = 'button';
+    head.appendChild(el('span', 'h mono', height != null ? '#' + formatCount(height) : '—'));
+    if (algo) {
+      var chipWrap = document.createElement('span');
+      chipWrap.appendChild(el('span', 'algo-chip ' + algo));
+      chipWrap.appendChild(document.createTextNode(ALGO_META[algo].label));
+      head.appendChild(chipWrap);
+    }
+    var mid = el('span', 'grow block-meta');
+    var rewardTxt = b.rewardItc != null ? Number(b.rewardItc).toFixed(4) + ' ITC' :
+      (b.rewardSat != null ? formatItcFromSat(b.rewardSat) : (b.reward != null ? formatItcFromSat(b.reward) : ''));
+    var minersTxt = b.minersPaid != null ? b.minersPaid + ' miners' :
+      (Array.isArray(b.miners) ? b.miners.length + ' miners' : (b.miners != null ? b.miners + ' miners' : ''));
+    mid.textContent = [rewardTxt, minersTxt, b.scheme ? String(b.scheme) : '', b.time ? formatRelativeTime(b.time) : ''].filter(Boolean).join(' · ');
+    head.appendChild(mid);
+    if (b.recomputedMatches != null) {
+      head.appendChild(el('span', 'match ' + (b.recomputedMatches ? 'yes' : 'no'),
+        b.recomputedMatches ? '✓ RECOMPUTED MATCH' : '⚠ MISMATCH'));
+    }
+    head.appendChild(el('span', 'panel-note', state.openBreakdowns[String(height)] ? 'hide' : 'view split'));
+    var body = el('div', 'breakdown-body hidden');
+    head.addEventListener('click', function () {
+      var key = String(height);
+      if (state.openBreakdowns[key]) {
+        state.openBreakdowns[key] = false;
+        body.classList.add('hidden');
+        head.querySelector('.panel-note').textContent = 'view split';
+        return;
+      }
+      state.openBreakdowns[key] = true;
+      body.classList.remove('hidden');
+      head.querySelector('.panel-note').textContent = 'hide';
+      body.textContent = '';
+      body.appendChild(el('div', 'empty', 'Recomputing the split from the raw ledger…'));
+      fetchJson('/api/blocks/' + encodeURIComponent(height) + '/breakdown')
+        .then(function (payload) { renderBreakdownDetail(body, payload, height); })
+        .catch(function () { body.textContent = ''; body.appendChild(el('div', 'empty', 'Breakdown unavailable for this block.')); });
+    });
+    wrap.appendChild(head);
+    wrap.appendChild(body);
+    box.appendChild(wrap);
+    if (state.openBreakdowns[String(height)]) {
+      state.openBreakdowns[String(height)] = false;
+      head.click();
+    }
   });
-  if (previous && items.some(function (b) { return String(b.height) + '|' + String(b.algo || '') === previous; })) {
-    select.value = previous;
-  }
-  if (empty) empty.hidden = items.length > 0;
-  select.disabled = items.length === 0;
 }
 
-function renderBreakdown(bd) {
-  var result = document.getElementById('fairness-result');
-  var meta = document.getElementById('fairness-meta');
-  var win = document.getElementById('fairness-window');
-  var tbody = document.getElementById('fairness-body');
-  var totals = document.getElementById('fairness-totals');
-  var link = document.getElementById('fairness-ledger-link');
-  if (!result || !bd || typeof bd !== 'object') return;
-  result.hidden = false;
-  if (meta) {
-    meta.textContent = 'Block #' + bd.height + ' (' + String(bd.algo) + ', ' + String(bd.scheme).toUpperCase() +
-      ', ' + String(bd.status) + ') — reward ' + formatSatCoins(bd.rewardSat) +
-      ' · pool fee ' + String(bd.feePercent) + '% = ' + formatSatCoins(bd.feeSat) +
-      (bd.matchesRecorded === true ? ' · recompute matches the recorded split ✓'
-        : bd.matchesRecorded === false ? ' · RECOMPUTE DOES NOT MATCH THE RECORDED SPLIT ✗' : '');
-    meta.className = 'miner-totals' + (bd.matchesRecorded === false ? ' fairness-mismatch' : '');
-  }
-  if (win && bd.shareWindow) {
-    var w = bd.shareWindow;
-    win.textContent = 'Share window: ' + String(w.definition) +
-      ' · ' + formatCount(w.shareCount) + ' share(s)' +
-      (w.windowN ? ' (last ' + w.windowN + ')' : '') +
-      (w.prevBlockTime != null ? ' · round opens after t=' + w.prevBlockTime : '') +
-      ' · closes at block time t=' + String(w.toTime);
-  }
-  if (tbody) {
-    while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
-    (bd.miners || []).forEach(function (m) {
-      var row = document.createElement('tr');
-      row.appendChild(el('td', 'mono', m.address));
-      row.appendChild(el('td', null, formatCount(m.shareCount)));
-      row.appendChild(el('td', null, String(m.weight) + ' (' + String(m.weightPercent) + '%)'));
-      row.appendChild(el('td', null, formatSatCoins(m.payoutAmountSat)));
-      row.appendChild(el('td', null, formatSatCoins(m.paidOutSat)));
-      row.appendChild(el('td', null, formatSatCoins(m.carryOverCreatedSat)));
-      row.appendChild(el('td', null, formatSatCoins(m.carryOverConsumedSat)));
-      tbody.appendChild(row);
+/* ---------------- rendering: payouts ---------------- */
+
+function renderPayouts(payload) {
+  var list = document.getElementById('payouts-list');
+  list.textContent = '';
+  var payouts = payload && Array.isArray(payload.payouts) ? payload.payouts : [];
+  document.getElementById('payouts-empty').classList.toggle('hidden', payouts.length > 0);
+  var pool = (payload && payload.pool) || state.payments || {};
+  var noteParts = [];
+  if (pool.feePercent != null) noteParts.push('fee ' + pool.feePercent + '%');
+  if (pool.minPayoutItc != null) noteParts.push('min payout ' + pool.minPayoutItc + ' ITC');
+  if (pool.confirmations != null) noteParts.push(pool.confirmations + ' confirmations');
+  document.getElementById('payouts-note').textContent = noteParts.join(' · ');
+  payouts.slice(0, 25).forEach(function (p) {
+    var row = el('div', 'payout-row');
+    var left = document.createElement('div');
+    if (p.dryRun) left.appendChild(el('span', 'badge dry', 'dry run'));
+    else left.appendChild(el('span', 'badge live-pay', 'live'));
+    var algo = normalizeAlgo(p.algo);
+    if (algo) {
+      var chipWrap = document.createElement('span');
+      chipWrap.style.marginLeft = '8px';
+      chipWrap.appendChild(el('span', 'algo-chip ' + algo));
+      chipWrap.appendChild(document.createTextNode(ALGO_META[algo].label));
+      left.appendChild(chipWrap);
+    }
+    row.appendChild(left);
+    var mid = document.createElement('div');
+    mid.appendChild(el('div', 'payout-total', p.totalItc != null ? Number(p.totalItc).toFixed(4) + ' ITC' : '—'));
+    var blocksTxt = Array.isArray(p.blocks) && p.blocks.length ? 'blocks ' + p.blocks.map(function (h) { return '#' + h; }).join(', ') : '';
+    mid.appendChild(el('div', 'payout-meta', [blocksTxt, formatDateTime(p.time)].filter(Boolean).join(' · ')));
+    row.appendChild(mid);
+    var right = el('div', 'payout-right');
+    right.appendChild(document.createTextNode((p.minersPaid != null ? p.minersPaid : 0) + ' miners paid'));
+    if (p.feeItc) {
+      right.appendChild(document.createElement('br'));
+      right.appendChild(document.createTextNode('fee ' + Number(p.feeItc).toFixed(4) + ' ITC'));
+    }
+    if (p.txid) {
+      right.appendChild(document.createElement('br'));
+      var tx = el('span', 'mono', truncateHash(p.txid));
+      tx.style.fontSize = '11px';
+      right.appendChild(tx);
+    }
+    row.appendChild(right);
+    list.appendChild(row);
+  });
+}
+
+/* ---------------- miner lookup ---------------- */
+
+function renderMiner(payload) {
+  var box = document.getElementById('miner-result');
+  box.textContent = '';
+  var card = el('div', 'miner-card');
+  card.appendChild(el('div', 'miner-addr', String(payload.address || '')));
+  var totals = payload.totals || {};
+  var grid = el('div', 'miner-grid');
+  grid.appendChild(fairStat(formatHashrate(totals.hashrateEstimate), 'hashrate (10m)'));
+  grid.appendChild(fairStat(formatCount(totals.shares), 'shares'));
+  grid.appendChild(fairStat(totals.pendingItc != null ? Number(totals.pendingItc).toFixed(4) + ' ITC' : '—', 'pending'));
+  grid.appendChild(fairStat(totals.paidItc != null ? Number(totals.paidItc).toFixed(4) + ' ITC' : '—', 'paid'));
+  card.appendChild(grid);
+  var algos = payload.algos || {};
+  ALGOS.forEach(function (a) {
+    var e = algos[a];
+    if (!e) return;
+    var row = el('div', 'algo-row');
+    var k = el('span', 'k');
+    k.appendChild(el('span', 'algo-chip ' + a));
+    k.appendChild(document.createTextNode(ALGO_META[a].label));
+    row.appendChild(k);
+    row.appendChild(el('span', 'v', formatHashrate(e.hashrateEstimate) + ' · ' + formatCount(e.shares) + ' shares · last ' + formatRelativeTime(e.lastShareAt)));
+    card.appendChild(row);
+  });
+  box.appendChild(card);
+}
+
+function lookupMiner(address) {
+  var box = document.getElementById('miner-result');
+  box.textContent = '';
+  box.appendChild(el('div', 'empty', 'Looking up ' + address + '…'));
+  fetchJson('/api/miner/' + encodeURIComponent(address))
+    .then(renderMiner)
+    .catch(function () {
+      box.textContent = '';
+      box.appendChild(el('div', 'lookup-error', 'No shares or balances found for that address yet. Solo miners are paid by the coinbase directly and may not appear here.'));
+    });
+}
+
+/* ---------------- config ---------------- */
+
+function renderConfig(cfg) {
+  if (!cfg) return;
+  if (cfg.stratumPorts) {
+    ALGOS.forEach(function (a) {
+      var p = asNumber(cfg.stratumPorts[a]);
+      if (p) state.ports[a] = p;
     });
   }
-  if (totals) {
-    totals.textContent = 'Totals: credited ' + formatSatCoins(bd.creditedSat) +
-      ' + fee ' + formatSatCoins(bd.feeSat) + ' = reward ' + formatSatCoins(bd.rewardSat) +
-      (bd.balanced ? ' ✓ balanced' : ' ✗ DOES NOT BALANCE');
+  if (cfg.algos) {
+    ALGOS.forEach(function (a) {
+      if (cfg.algos[a] && cfg.algos[a].scheme) state.schemes[a] = String(cfg.algos[a].scheme).toLowerCase();
+    });
   }
-  if (link) link.href = '/api/blocks/' + bd.height + '/ledger?algo=' + encodeURIComponent(String(bd.algo || ''));
+  if (cfg.payments) state.payments = cfg.payments;
+  if (cfg.poolAddress) state.poolAddress = cfg.poolAddress;
+  var dry = state.payments && state.payments.dryRun;
+  document.getElementById('dryrun-banner').classList.toggle('hidden', !dry);
 }
 
-function loadBreakdown() {
-  var select = document.getElementById('fairness-block-select');
-  if (!select || !select.value) return;
-  var parts = select.value.split('|');
-  var url = '/api/blocks/' + encodeURIComponent(parts[0]) + '/breakdown?algo=' + encodeURIComponent(parts[1] || '');
-  fetchJson(url).then(function (bd) {
-    renderBreakdown(Array.isArray(bd) ? bd[0] : bd);
-  }).catch(function () { /* status banner covers API failures */ });
-}
-
-/* ---------- fetching / status ---------- */
-
-function fetchJson(path) {
-  return fetch(path, { headers: { Accept: 'application/json' }, cache: 'no-store' }).then(function (res) {
-    if (!res.ok) throw new Error(path + ' returned ' + res.status);
-    return res.json();
-  });
-}
-
-function setApiStatus(ok) {
-  var dot = document.getElementById('api-dot');
-  var text = document.getElementById('api-status-text');
-  var banner = document.getElementById('api-banner');
-  if (dot) {
-    dot.className = 'status-dot ' + (ok ? 'status-ok' : 'status-error');
-  }
-  if (text) text.textContent = ok ? 'API online' : 'API unreachable';
-  if (banner) {
-    if (ok) {
-      banner.hidden = true;
-      state.bannerDismissed = false;
-    } else if (!state.bannerDismissed) {
-      banner.hidden = false;
-    }
-  }
-}
+/* ---------------- refresh ---------------- */
 
 function refresh() {
-  var endpoints = [
-    fetchJson('/api/stats'),
-    fetchJson('/api/blocks'),
-    fetchJson('/api/workers'),
-    fetchJson('/api/config'),
-    fetchJson('/api/payouts'),
-    fetchJson('/api/payouts/blocks'),
-    fetchJson('/api/breakdowns'),
-    fetchJson('/api/reconcile')
+  var jobs = [
+    fetchJson('/health').then(function () { setApiStatus(true, 'live'); }).catch(function () { setApiStatus(false, 'api offline'); }),
+    fetchJson('/api/stats').then(renderStats).catch(function () {}),
+    fetchJson('/api/config').then(renderConfig).catch(function () {}),
+    fetchJson('/api/workers').then(renderWorkers).catch(function () {}),
+    fetchJson('/api/payouts').then(renderPayouts).catch(function () {}),
+    fetchJson('/api/reconcile').then(renderReconcile).catch(function () { renderReconcile(null); })
   ];
-  return Promise.allSettled(endpoints).then(function (results) {
-    var anyOk = results.some(function (r) { return r.status === 'fulfilled'; });
-    var allOk = results.every(function (r) { return r.status === 'fulfilled'; });
-    setApiStatus(allOk);
-
-    // Render whatever succeeded; a partial failure never blanks good data.
-    if (results[0].status === 'fulfilled') renderStats(results[0].value);
-    if (results[1].status === 'fulfilled') renderBlocks(results[1].value);
-    if (results[2].status === 'fulfilled') renderWorkers(results[2].value);
-    if (results[3].status === 'fulfilled') renderConfig(results[3].value);
-    else if (anyOk) renderConnection();
-    if (results[5] && results[5].status === 'fulfilled') {
-      renderStoreBlocks(results[5].value);
-      if (results[1].status === 'fulfilled') renderBlocks(results[1].value);
-    }
-    if (results[4] && results[4].status === 'fulfilled') renderPayouts(results[4].value);
-    if (results[6] && results[6].status === 'fulfilled') renderBreakdownList(results[6].value);
-    if (results[7] && results[7].status === 'fulfilled') renderReconcile(results[7].value);
-    return allOk;
-  }).catch(function () {
-    // Promise.allSettled should not reject, but never let refresh crash the loop.
-    setApiStatus(false);
-    return false;
-  });
+  var blocksPromise = fetchJson('/api/blocks?limit=30').catch(function () { return []; });
+  var storePromise = fetchJson('/api/blocks?limit=30&source=store').catch(function () { return []; });
+  jobs.push(Promise.all([blocksPromise, storePromise]).then(function (r) { renderBlocks(r[0], r[1]); }));
+  jobs.push(fetchJson('/api/breakdowns').then(renderBreakdowns).catch(function () {}));
+  return Promise.all(jobs);
 }
 
-/* ---------- boot ---------- */
-
 function init() {
-  var dismiss = document.getElementById('api-banner-dismiss');
-  if (dismiss) {
-    dismiss.addEventListener('click', function () {
-      state.bannerDismissed = true;
-      var banner = document.getElementById('api-banner');
-      if (banner) banner.hidden = true;
-    });
+  document.getElementById('lookup-form').addEventListener('submit', function (ev) {
+    ev.preventDefault();
+    var value = document.getElementById('lookup-input').value.trim();
+    if (value) lookupMiner(value);
+  });
+  var params = new URLSearchParams(window.location.search);
+  var prefill = params.get('miner');
+  if (prefill) {
+    document.getElementById('lookup-input').value = prefill;
+    lookupMiner(prefill);
   }
-
-  var fairnessLoad = document.getElementById('fairness-load');
-  if (fairnessLoad) fairnessLoad.addEventListener('click', loadBreakdown);
-  var fairnessSelect = document.getElementById('fairness-block-select');
-  if (fairnessSelect) fairnessSelect.addEventListener('change', loadBreakdown);
-
-  var minerForm = document.getElementById('miner-form');
-  if (minerForm) {
-    minerForm.addEventListener('submit', function (ev) {
-      ev.preventDefault();
-      var input = document.getElementById('miner-address');
-      lookupMiner(input ? input.value.trim() : '');
-    });
-  }
-
-  renderConnection();
-  renderSchemeBadges();
-  renderPayouts(null);
   refresh();
   setInterval(refresh, REFRESH_MS);
   setInterval(updateUptime, 1000);
+  window.addEventListener('resize', drawCharts);
 }
 
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', init);
-} else {
-  init();
-}
+document.addEventListener('DOMContentLoaded', init);
