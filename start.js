@@ -412,6 +412,34 @@ function setupPayments(config, pools) {
  * that process has no pools attached. Port: config.api.port,
  * else ITC_API_PORT, else 8080. A busy port (e.g. the standalone
  * server still running) logs a warning and never stops the pools. */
+/* Build the dashboard's network snapshot from a daemon getmininginfo
+   response plus the peer count from getnetworkinfo. Pure and exported
+   for tests: the field names are the daemon's own (src/rpc/mining.cpp)
+   — difficulty_<algo> / networkhashps_<algo> exist ONLY on
+   getmininginfo, never on getblockchaininfo. Returns null until the
+   daemon has answered with a numeric block height. */
+function buildNetworkSnapshot(info, peers) {
+    if (!info || typeof info.blocks !== 'number') return null;
+    var numOrNull = function (v) { return (typeof v === 'number' && isFinite(v)) ? v : null; };
+    return {
+        available: true,
+        height: info.blocks,
+        peers: numOrNull(peers),
+        difficulty: {
+            sha256: numOrNull(info.difficulty_sha256),
+            yespower: numOrNull(info.difficulty_yespower),
+            ethash: numOrNull(info.difficulty_ethash)
+        },
+        networkHashrate: {
+            total: numOrNull(info.networkhashps),
+            sha256: numOrNull(info.networkhashps_sha256),
+            yespower: numOrNull(info.networkhashps_yespower),
+            ethash: numOrNull(info.networkhashps_ethash)
+        },
+        updatedAt: Date.now()
+    };
+}
+
 function setupApiServer(config, collector) {
     if (!collector) return null;
     try {
@@ -428,38 +456,36 @@ function setupApiServer(config, collector) {
         });
         var payCfg = config.payments || {};
 
-        /* Network vitals: poll the daemon's getblockchaininfo and
-           serve the TRI-POW fields (per-lane difficulty and
-           hashrate). The classic pool banners print the single
-           shared `difficulty` scalar for every lane; these are the
-           real per-lane numbers the dashboard shows. */
+        /* Network vitals: poll the daemon and serve the TRI-POW
+           fields (per-lane difficulty and hashrate). Those fields do
+           NOT live on getblockchaininfo — the daemon serves them from
+           getmininginfo (difficulty_<algo>, networkhashps_<algo>),
+           and the peer count is getnetworkinfo's `connections`. The
+           original wiring polled getblockchaininfo for all of them,
+           so every lane rendered null forever while the height (the
+           one field GBCI does carry) worked. */
         var networkSnapshot = null;
         try {
             var netDaemon = new daemonModule.interface(daemonList(config), function () {});
             netDaemon.init();
-            var numOrNull = function (v) { return (typeof v === 'number' && isFinite(v)) ? v : null; };
+            var lastMiningInfo = null;
+            var lastPeers = null;
+            var publishNetwork = function () {
+                var snap = buildNetworkSnapshot(lastMiningInfo, lastPeers);
+                if (snap) networkSnapshot = snap;
+            };
             var pollNetwork = function () {
-                netDaemon.cmd('getblockchaininfo', [], function (results) {
+                netDaemon.cmd('getmininginfo', [], function (results) {
+                    var r = results && results[0];
+                    if (r && r.response) { lastMiningInfo = r.response; publishNetwork(); }
+                });
+                netDaemon.cmd('getnetworkinfo', [], function (results) {
                     var r = results && results[0];
                     var info = r && r.response;
-                    if (!info || typeof info.blocks !== 'number') return;
-                    networkSnapshot = {
-                        available: true,
-                        height: info.blocks,
-                        peers: numOrNull(info.connections),
-                        difficulty: {
-                            sha256: numOrNull(info.difficulty_sha256),
-                            yespower: numOrNull(info.difficulty_yespower),
-                            ethash: numOrNull(info.difficulty_ethash)
-                        },
-                        networkHashrate: {
-                            total: numOrNull(info.networkhashps),
-                            sha256: numOrNull(info.networkhashps_sha256),
-                            yespower: numOrNull(info.networkhashps_yespower),
-                            ethash: numOrNull(info.networkhashps_ethash)
-                        },
-                        updatedAt: Date.now()
-                    };
+                    if (info && typeof info.connections === 'number') {
+                        lastPeers = info.connections;
+                        publishNetwork();
+                    }
                 });
             };
             pollNetwork();
@@ -474,6 +500,7 @@ function setupApiServer(config, collector) {
             networkProvider: function () { return networkSnapshot; },
             poolConfig: {
                 address: config.address || config.poolAddress,
+                stratumHost: config.stratumHost || process.env.ITC_STRATUM_HOST || undefined,
                 algos: algosCfg,
                 payments: {
                     feePercent: payCfg.feePercent,
@@ -535,6 +562,7 @@ module.exports = {
     createPools: createPools,
     setupPayments: setupPayments,
     setupApiServer: setupApiServer,
+    buildNetworkSnapshot: buildNetworkSnapshot,
     envConfig: envConfig,
     DEFAULT_STRATUM_PORTS: DEFAULT_STRATUM_PORTS
 };
