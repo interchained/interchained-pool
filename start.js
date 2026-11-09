@@ -46,6 +46,7 @@ var path = require('path');
 var stratumPool = require('./lib/index.js');
 var daemonModule = require('./lib/daemon.js');
 var payoutsLedger = require('./lib/payouts/ledger.js');
+var payoutsStorePath = require('./lib/payouts/storePath.js');
 var payoutsAttach = require('./lib/payouts/attach.js');
 var paymentsModule = require('./lib/payouts/payments.js');
 var ethashPool = require('./lib/ethash/ethashPool.js');
@@ -370,7 +371,9 @@ function setupPayments(config, pools) {
         };
     });
 
-    var dataFile = payCfg.dataFile || path.join(__dirname, 'api', 'data', 'payouts.json');
+    /* One resolver for writer and readers alike (lib/payouts/storePath.js):
+       the ledger must land in the file every API server reads. */
+    var dataFile = payoutsStorePath.resolvePayoutsStorePath({ config: config, env: process.env });
     var ledger = new payoutsLedger.Ledger({ dataFile: dataFile });
 
     pools.forEach(function (pool) {
@@ -509,7 +512,7 @@ function setupApiServer(config, collector) {
                     confirmations: payCfg.confirmations
                 }
             },
-            payoutsFile: payCfg.dataFile || undefined
+            payoutsFile: payoutsStorePath.resolvePayoutsStorePath({ config: config, env: process.env })
         });
         server.on('error', function (e) {
             console.error('[api] could not listen on port ' + port + ': ' + e.message +
