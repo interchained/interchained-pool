@@ -152,6 +152,9 @@ function sendJson(res, status, value) {
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
     'Content-Length': Buffer.byteLength(body),
+    /* Live pool data must never be cached — not by a browser, not
+       by a CDN edge. A cached /api/stats reads as empty stats. */
+    'Cache-Control': 'no-store',
   });
   res.end(body);
 }
@@ -577,10 +580,32 @@ function serveStatic(req, res, uiDir, pathname) {
       sendJson(res, 404, { error: 'not found' });
       return;
     }
-    const type =
-      CONTENT_TYPES[path.extname(filePath).toLowerCase()] ||
-      'application/octet-stream';
-    res.writeHead(200, { 'Content-Type': type, 'Content-Length': stat.size });
+    const ext = path.extname(filePath).toLowerCase();
+    const type = CONTENT_TYPES[ext] || 'application/octet-stream';
+    /* Cache policy (the dashboard sits behind Cloudflare in
+       production): code and styles revalidate on EVERY load via
+       Last-Modified, so a deploy is visible on the next refresh —
+       no heuristic caching of styles.css, ever. The nedb-wasm
+       engine binary is content-pinned and caches for a year;
+       media gets a day. index.html also version-stamps its asset
+       URLs (?v=) as a second bust. */
+    let cacheControl;
+    if (ext === '.wasm') cacheControl = 'public, max-age=31536000, immutable';
+    else if (['.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico', '.webp', '.woff', '.woff2'].includes(ext)) cacheControl = 'public, max-age=86400';
+    else cacheControl = 'no-cache';
+    const lastModified = stat.mtime.toUTCString();
+    const ims = req.headers['if-modified-since'];
+    if (ims && Date.parse(ims) >= Math.floor(stat.mtimeMs / 1000) * 1000) {
+      res.writeHead(304, { 'Cache-Control': cacheControl, 'Last-Modified': lastModified });
+      res.end();
+      return;
+    }
+    res.writeHead(200, {
+      'Content-Type': type,
+      'Content-Length': stat.size,
+      'Cache-Control': cacheControl,
+      'Last-Modified': lastModified,
+    });
     if (req.method === 'HEAD') {
       res.end();
       return;

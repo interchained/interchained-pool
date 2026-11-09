@@ -404,6 +404,57 @@ function setupPayments(config, pools) {
     return { ledger: ledger, processor: processor, daemon: daemon };
 }
 
+/* Stats API + dashboard, served IN-PROCESS by the pool itself.
+ * The collector is a singleton (loadCollector caches it), so the
+ * API reads the exact live state the stratum pools are feeding:
+ * hashrate, workers, shares and session blocks. Running
+ * api/server.js standalone instead shows an empty collector —
+ * that process has no pools attached. Port: config.api.port,
+ * else ITC_API_PORT, else 8080. A busy port (e.g. the standalone
+ * server still running) logs a warning and never stops the pools. */
+function setupApiServer(config, collector) {
+    if (!collector) return null;
+    try {
+        var api = require('./api/server.js');
+        var port = (config.api && config.api.port) || Number(process.env.ITC_API_PORT) || 8080;
+        var algosCfg = {};
+        algoEntries(config).forEach(function (entry) {
+            var a = entry.algorithm || entry.algo;
+            algosCfg[a] = {
+                stratumPort: entry.stratumPort || entry.port || DEFAULT_STRATUM_PORTS[a],
+                scheme: entry.scheme || 'solo',
+                pplnsWindow: entry.pplnsWindow
+            };
+        });
+        var payCfg = config.payments || {};
+        var server = api.createServer({
+            collector: collector,
+            poolConfig: {
+                address: config.address || config.poolAddress,
+                algos: algosCfg,
+                payments: {
+                    feePercent: payCfg.feePercent,
+                    minPayout: payCfg.minPayout,
+                    dryRun: payCfg.dryRun,
+                    confirmations: payCfg.confirmations
+                }
+            },
+            payoutsFile: payCfg.dataFile || undefined
+        });
+        server.on('error', function (e) {
+            console.error('[api] could not listen on port ' + port + ': ' + e.message +
+                ' — is the standalone api/server.js still running? Stop it; this process serves the dashboard now.');
+        });
+        server.listen(port, function () {
+            console.log('[api] dashboard + live stats API on port ' + port + ' (in-process collector)');
+        });
+        return server;
+    } catch (e) {
+        console.error('[api] failed to start: ' + e.message);
+        return null;
+    }
+}
+
 function main() {
     var configPath = process.argv[2] || process.env.ITC_POOL_CONFIG;
     var config = loadConfig(configPath);
@@ -426,6 +477,7 @@ function main() {
 
     pools.forEach(function (pool) { pool.start(); });
     setupPayments(config, pools);
+    setupApiServer(config, loadCollector());
 }
 
 if (require.main === module) {
@@ -439,6 +491,7 @@ module.exports = {
     authorizeFn: authorizeFn,
     createPools: createPools,
     setupPayments: setupPayments,
+    setupApiServer: setupApiServer,
     envConfig: envConfig,
     DEFAULT_STRATUM_PORTS: DEFAULT_STRATUM_PORTS
 };
