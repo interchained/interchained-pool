@@ -413,9 +413,10 @@
       fetchJson('/api/reconcile').catch(function () { return null; }),
       fetchJson('/api/breakdowns').catch(function () { return []; }),
       fetchJson('/api/stats').catch(function () { return null; }),
-      fetchJson('/api/chat?limit=120').catch(function () { return null; })
+      fetchJson('/api/chat?limit=120').catch(function () { return null; }),
+      fetchJson('/api/network').catch(function () { return null; })
     ]).then(function (r) {
-      var d = { config: r[0], workers: r[1], storeBlocks: r[2], payouts: r[3], reconcile: r[4], breakdowns: r[5], stats: r[6], now: Date.now() };
+      var d = { config: r[0], workers: r[1], storeBlocks: r[2], payouts: r[3], reconcile: r[4], breakdowns: r[5], stats: r[6], network: r[8], now: Date.now() };
       state.data = d;
       if (r[7]) syncChat(r[7]);
       if (!state.booted) {
@@ -462,7 +463,8 @@
         lastStreamKey = key;
         push('block-feed', 'blocks', [
           '📊 BLOCK STATS — ledger: ' + ledgerCount + ' blocks · this session: SHA ' + sess.sha256 + ' · YES ' + sess.yespower + ' · ETH ' + sess.ethash +
-          (latest ? ' · latest #' + Number(latest.height).toLocaleString('en-US') + ' (' + String(latest.algo || '').toUpperCase() + ')' : '')
+          (latest ? ' · latest #' + Number(latest.height).toLocaleString('en-US') + ' (' + String(latest.algo || '').toUpperCase() + ')' : '') +
+          (d.network && d.network.available ? ' · chain #' + Number(d.network.height).toLocaleString('en-US') + ' · network ' + fmtHashrate(d.network.networkHashrate ? d.network.networkHashrate.total : null) : '')
         ], d.now);
         var rr = (acc + rej) > 0 ? (100 * rej / (acc + rej)).toFixed(2) : '0.00';
         push('miner-chat', 'miners', [

@@ -38,6 +38,7 @@
   <div class="desktop-icons" aria-hidden="true">
     <div class="dicon" data-open="win-hero"><div class="dicon-img">⛏️</div><div class="dicon-label">MINE.EXE</div></div>
     <div class="dicon" data-open="win-blocks"><div class="dicon-img">🧱</div><div class="dicon-label">BLOCKS</div></div>
+    <div class="dicon" data-open="win-network"><div class="dicon-img">🌐</div><div class="dicon-label">NETWORK</div></div>
     <div class="dicon" data-open="win-payouts" data-mode="group"><div class="dicon-img">🪙</div><div class="dicon-label">PAYOUTS</div></div>
     <div class="dicon" data-open="win-fairness" data-mode="group"><div class="dicon-img">⚖️</div><div class="dicon-label">FAIRNESS</div></div>
     <div class="dicon" id="icon-saver"><div class="dicon-img">✨</div><div class="dicon-label">SAVER</div></div>
@@ -72,6 +73,7 @@
           <div class="hero-label">POOL HASHRATE · ALL ALGORITHMS</div>
           <div class="hero-value mono" id="hero-hashrate">—</div>
           <div class="hero-sub" id="hero-sub">SHA256 · Yespower · Ethash — three difficulties, one chain.</div>
+          <div class="hero-net mono" id="hero-net"></div>
           <div class="press-start" aria-hidden="true">▶ PRESS START · MINING LIVE</div>
         </div>
         <div class="hero-stats">
@@ -87,6 +89,21 @@
 
     <!-- ALGO CARDS -->
     <section class="algo-grid" id="algo-grid"></section>
+
+    <!-- NETWORK VITALS (both modes; live from the daemon) -->
+    <section class="window" id="win-network">
+      <div class="window-bar"><span class="window-title">🌐 NETWORK.EXE — CHAIN VITALS</span><span class="win-btns"><i data-act="min">_</i><i data-act="max">▢</i><i data-act="close">✕</i></span></div>
+      <div class="window-body">
+        <div class="net-big">
+          <div class="net-cell"><div class="net-num" id="net-height">—</div><div class="net-cap">CHAIN HEIGHT</div></div>
+          <div class="net-cell"><div class="net-num" id="net-total-hr">—</div><div class="net-cap">NETWORK HASHRATE · ALL LANES</div></div>
+          <div class="net-cell"><div class="net-num" id="net-peers">—</div><div class="net-cap">PEERS</div></div>
+        </div>
+        <div id="net-rows"></div>
+        <p class="hint" id="net-note">Per-lane difficulty and hashrate, live from the daemon (getblockchaininfo). Each lane retargets on its own — the numbers SHOULD differ.</p>
+      </div>
+      <div class="win-status"><span class="ws-pane grow" id="net-status">NETWORK: …</span><span class="ws-pane">SRC: DAEMON RPC</span></div>
+    </section>
 
     <!-- SOLO NOTE (solo mode only; group mode shows fairness + payouts) -->
     <section class="window" id="win-solo" data-mode="solo">
