@@ -644,3 +644,57 @@ body.mode-group [data-mode="solo"] { display: none !important; }
   0%, 100% { text-shadow: 3px 3px 0 rgba(0,30,80,.55), 0 0 26px rgba(70,224,70,.25); }
   50% { text-shadow: 3px 3px 0 rgba(0,30,80,.55), 0 0 46px rgba(70,224,70,.5); }
 }
+
+/* ==== MORE BRANDING (Mark's ask) ================================== */
+::selection { background: #ffd83d; color: #161616; }
+body::-webkit-scrollbar, .hub-messages::-webkit-scrollbar, .window-body::-webkit-scrollbar { width: 12px; height: 12px; }
+body::-webkit-scrollbar-track, .hub-messages::-webkit-scrollbar-track, .window-body::-webkit-scrollbar-track { background: #0b1026; }
+body::-webkit-scrollbar-thumb, .hub-messages::-webkit-scrollbar-thumb, .window-body::-webkit-scrollbar-thumb { background: linear-gradient(180deg, #ffe98a, #caa437); border: 2px solid #0b1026; border-radius: 6px; }
+
+.brand-ticker {
+  position: fixed; top: 0; left: 0; right: 0; height: 22px; z-index: 25;
+  overflow: hidden; pointer-events: none;
+  background: linear-gradient(180deg, rgba(11,16,38,.95), rgba(11,16,38,.82));
+  border-bottom: 2px solid rgba(255,216,61,.75);
+}
+.brand-ticker-track {
+  display: flex; width: max-content; height: 22px; align-items: center;
+  animation: brandScroll 36s linear infinite;
+}
+.brand-ticker-track span {
+  font-family: 'Press Start 2P', monospace; font-size: 8px; letter-spacing: 2px;
+  color: #ffd83d; white-space: nowrap; text-shadow: 0 0 8px rgba(255,216,61,.45);
+}
+@keyframes brandScroll { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+
+.wall-word {
+  position: fixed; left: 50%; top: 55%; transform: translateX(-50%);
+  text-align: center; pointer-events: none; z-index: 0; opacity: .9;
+}
+.wall-word-name {
+  font-family: 'Press Start 2P', monospace; font-size: clamp(17px, 3.6vw, 32px);
+  letter-spacing: 7px; color: rgba(255,216,61,.34);
+  text-shadow: 0 2px 0 rgba(0,0,0,.35), 0 0 26px rgba(255,216,61,.16);
+}
+.wall-word-sub {
+  margin-top: 10px; font-family: 'VT323', monospace; font-size: clamp(14px, 1.6vw, 20px);
+  letter-spacing: 6px; color: rgba(159,227,171,.4);
+}
+
+.win-coin { width: 15px; height: 15px; margin-right: 7px; flex: 0 0 auto; filter: drop-shadow(0 1px 1px rgba(0,0,0,.5)); }
+
+.tb-brand {
+  display: inline-flex; align-items: center; gap: 7px; padding: 0 12px 0 4px;
+  font-family: 'Press Start 2P', monospace; font-size: 8px; letter-spacing: 1px; color: #ffd83d;
+  border-right: 2px ridge rgba(255,255,255,.22); text-shadow: 0 0 7px rgba(255,216,61,.4);
+}
+.tb-brand img { width: 19px; height: 20px; }
+@media (max-width: 760px) { .tb-brand { display: none; } }
+
+.shutdown-logo { display: block; width: 96px; height: auto; margin: 0 auto 16px; filter: drop-shadow(0 0 22px rgba(255,216,61,.35)); }
+.about-line.gold { color: #ffd83d; }
+.dicon-label { text-shadow: 0 1px 0 #000, 0 0 9px rgba(255,216,61,.35); }
+
+@media (prefers-reduced-motion: reduce) {
+  .brand-ticker-track { animation: none; }
+}

@@ -41,7 +41,12 @@
   var biosFill = document.getElementById('bios-fill');
   var bootDone = false;
   var BOOT_LINES = [
-    'INTERCHAINED BIOS v9.14 — CHECKING SYSTEM',
+    '╔══════════════════════════════════════╗',
+    '║   ⛓  I N T E R C H A I N E D  ⛓    ║',
+    '║     ONE CHAIN · THREE PROOFS        ║',
+    '╚══════════════════════════════════════╝',
+    'ITC SYSTEMS INC. — INTERCHAINED BIOS v9.14',
+    '',
     'CPU ......... 64 CORES DETECTED .......... OK',
     'MEMORY ...... {MEM}K SYSTEM RAM ......... OK',
     'GPU ......... ETHASH LANE · 32GB VRAM .... OK',
@@ -188,6 +193,17 @@
     if (!win.classList.contains('hidden') && !modeHidden(win)) ensureTaskBtn(win);
     var bar = win.querySelector('.window-bar');
     if (!bar) return;
+
+    /* brand every window: the coin rides in each title bar */
+    if (!bar.querySelector('.win-coin')) {
+      var brandImg = document.querySelector('.brand-logo');
+      var coin = document.createElement('img');
+      coin.className = 'win-coin';
+      coin.src = brandImg ? brandImg.src : 'logo.png';
+      coin.alt = '';
+      coin.setAttribute('aria-hidden', 'true');
+      bar.insertBefore(coin, bar.firstChild);
+    }
 
     win.addEventListener('pointerdown', function () { focus(win); });
 
