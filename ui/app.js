@@ -9,9 +9,9 @@
 var ALGOS = ['sha256', 'yespower', 'ethash'];
 
 var ALGO_META = {
-  sha256:   { label: 'SHA256',   kind: 'ASIC', defaultPort: 3333, color: '#f7931a' },
-  yespower: { label: 'Yespower', kind: 'CPU',  defaultPort: 3334, color: '#3fb96f' },
-  ethash:   { label: 'Ethash',   kind: 'GPU',  defaultPort: 3335, color: '#8a7cff' }
+  sha256:   { label: 'SHA256',   kind: 'ASIC', defaultPort: 3333, color: '#ff5252' },
+  yespower: { label: 'Yespower', kind: 'CPU',  defaultPort: 3334, color: '#46e046' },
+  ethash:   { label: 'Ethash',   kind: 'GPU',  defaultPort: 3335, color: '#38b6ff' }
 };
 
 var REFRESH_MS = 10000;
@@ -20,6 +20,7 @@ var HISTORY_MAX = 90; /* 90 samples x 10s = 15 minutes of live chart */
 var state = {
   ports: { sha256: 3333, yespower: 3334, ethash: 3335 },
   schemes: {},
+  mode: null,
   payments: null,
   poolAddress: null,
   startedAtMs: null,
@@ -658,8 +659,31 @@ function renderConfig(cfg) {
   }
   if (cfg.payments) state.payments = cfg.payments;
   if (cfg.poolAddress) state.poolAddress = cfg.poolAddress;
-  var dry = state.payments && state.payments.dryRun;
+  applyMode();
+  var dry = state.mode === 'group' && state.payments && state.payments.dryRun;
   document.getElementById('dryrun-banner').classList.toggle('hidden', !dry);
+}
+
+/* One page, one direction: the pool runs SOLO or it runs a group
+   scheme (PROP / PPLNS) — decided by the operator's env
+   (ITC_<ALGO>_SCHEME), never both at once. Any group lane makes the
+   page a group page (fairness + payouts); all-solo makes it a solo
+   page (coinbase pays the finder, nothing to split). */
+function applyMode() {
+  var group = ALGOS.some(function (a) {
+    var s = state.schemes[a];
+    return s && s !== 'solo';
+  });
+  var mode = group ? 'group' : 'solo';
+  if (state.mode === mode) return;
+  state.mode = mode;
+  document.body.classList.toggle('mode-group', group);
+  document.body.classList.toggle('mode-solo', !group);
+  var sub = document.getElementById('hero-sub');
+  if (sub) sub.textContent = group
+    ? 'Group mining — PROP / PPLNS splits, published and recomputable to the satoshi.'
+    : 'Solo mining — every block pays its finder directly, in full. No splits, no fees.';
+  document.dispatchEvent(new CustomEvent('poolmode', { detail: { mode: mode } }));
 }
 
 /* ---------------- refresh ---------------- */

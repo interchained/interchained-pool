@@ -5,18 +5,50 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Interchained Tri-PoW Mining Pool — SHA256, Yespower and Ethash, one chain, three ways to mine it.">
   <title>Interchained — Tri-PoW Mining Pool</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='13' cy='16' r='8' fill='none' stroke='%23e3b341' stroke-width='3'/%3E%3Ccircle cx='21' cy='16' r='8' fill='none' stroke='%23e3b341' stroke-width='3' opacity='.55'/%3E%3C/svg%3E">
+  <link rel="icon" type="image/png" href="logo.png">
 </head>
-<body>
-  <div class="bg-glow" aria-hidden="true"></div>
+<body class="mode-solo">
+  <!-- BOOT SCREEN -->
+  <div id="bios" role="presentation">
+    <div class="bios-inner">
+      <pre id="bios-text"></pre>
+      <div class="bios-bar"><div id="bios-fill"></div></div>
+      <div class="bios-skip">PRESS ANY KEY OR CLICK TO SKIP</div>
+    </div>
+  </div>
+
+  <!-- SHUTDOWN SCREEN -->
+  <div id="shutdown" class="hidden" role="presentation">
+    <div class="shutdown-text">It is now safe to turn off<br>your miner.</div>
+    <div class="shutdown-sub">CLICK ANYWHERE TO REBOOT INTERCHAINED OS</div>
+  </div>
+
+  <!-- SCREENSAVER -->
+  <canvas id="saver" class="hidden" aria-hidden="true"></canvas>
+
+  <div id="edgeflash" aria-hidden="true"></div>
+  <div class="bg-fx" aria-hidden="true"></div>
+  <img class="wall-logo" src="logo.png" alt="" aria-hidden="true">
+  <div class="scanlines" aria-hidden="true"></div>
+
+  <div class="desktop-icons" aria-hidden="true">
+    <div class="dicon" data-open="win-hero"><div class="dicon-img">⛏️</div><div class="dicon-label">MINE.EXE</div></div>
+    <div class="dicon" data-open="win-blocks"><div class="dicon-img">🧱</div><div class="dicon-label">BLOCKS</div></div>
+    <div class="dicon" data-open="win-payouts" data-mode="group"><div class="dicon-img">🪙</div><div class="dicon-label">PAYOUTS</div></div>
+    <div class="dicon" data-open="win-fairness" data-mode="group"><div class="dicon-img">⚖️</div><div class="dicon-label">FAIRNESS</div></div>
+    <div class="dicon" id="icon-saver"><div class="dicon-img">✨</div><div class="dicon-label">SAVER</div></div>
+  </div>
 
   <header class="topbar">
     <div class="brand">
-      <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><circle cx="13" cy="16" r="8" fill="none" stroke="currentColor" stroke-width="3"/><circle cx="21" cy="16" r="8" fill="none" stroke="currentColor" stroke-width="3" opacity=".55"/></svg>
+      <img class="brand-logo" src="logo.png" alt="Interchained coin">
       <div class="brand-text">
         <div class="brand-name">INTERCHAINED</div>
-        <div class="brand-sub">TRI-PoW MINING POOL</div>
+        <div class="brand-sub">TRI-POW MINING POOL · EST. 913982</div>
       </div>
     </div>
     <div class="topbar-right">
@@ -28,85 +60,125 @@
 
   <main class="wrap">
     <div class="banner hidden" id="dryrun-banner">
-      <strong>Payments are in dry-run.</strong>
+      <strong>⚠ PAYMENTS ARE IN DRY-RUN.</strong>
       <span>Payout batches are computed and published, but no coins move until the operator enables live payments. Every split is still fully accounted below.</span>
     </div>
 
     <!-- HERO -->
-    <section class="hero panel">
-      <div class="hero-main">
-        <div class="hero-label">POOL HASHRATE · ALL ALGORITHMS</div>
-        <div class="hero-value mono" id="hero-hashrate">—</div>
-        <div class="hero-sub" id="hero-sub">SHA256 · Yespower · Ethash — three difficulties, one chain.</div>
+    <section class="window hero" id="win-hero">
+      <div class="window-bar"><span class="window-title">🖥 POOL.EXE — LIVE HASHRATE MONITOR</span><span class="win-btns"><i data-act="min">_</i><i data-act="max">▢</i><i data-act="close">✕</i></span></div>
+      <div class="window-body">
+        <div class="hero-main">
+          <div class="hero-label">POOL HASHRATE · ALL ALGORITHMS</div>
+          <div class="hero-value mono" id="hero-hashrate">—</div>
+          <div class="hero-sub" id="hero-sub">SHA256 · Yespower · Ethash — three difficulties, one chain.</div>
+          <div class="press-start" aria-hidden="true">▶ PRESS START · MINING LIVE</div>
+        </div>
+        <div class="hero-stats">
+          <div class="hero-stat"><div class="hero-stat-value mono" id="hero-workers">—</div><div class="hero-stat-label">miners online</div></div>
+          <div class="hero-stat"><div class="hero-stat-value mono" id="hero-blocks">—</div><div class="hero-stat-label">blocks found</div></div>
+          <div class="hero-stat"><div class="hero-stat-value mono" id="hero-shares">—</div><div class="hero-stat-label">shares accepted</div></div>
+          <div class="hero-stat"><div class="hero-stat-value mono" id="hero-reject">—</div><div class="hero-stat-label">reject rate</div></div>
+        </div>
+        <canvas id="hero-chart" class="hero-chart" aria-hidden="true"></canvas>
       </div>
-      <div class="hero-stats">
-        <div class="hero-stat"><div class="hero-stat-value mono" id="hero-workers">—</div><div class="hero-stat-label">miners online</div></div>
-        <div class="hero-stat"><div class="hero-stat-value mono" id="hero-blocks">—</div><div class="hero-stat-label">blocks found</div></div>
-        <div class="hero-stat"><div class="hero-stat-value mono" id="hero-shares">—</div><div class="hero-stat-label">shares accepted</div></div>
-        <div class="hero-stat"><div class="hero-stat-value mono" id="hero-reject">—</div><div class="hero-stat-label">reject rate</div></div>
-      </div>
-      <canvas id="hero-chart" class="hero-chart" aria-hidden="true"></canvas>
+      <div class="win-status"><span class="ws-pane grow" id="hero-status">READY</span><span class="ws-pane">OBJ: 3 ALGOS</span></div>
     </section>
 
     <!-- ALGO CARDS -->
     <section class="algo-grid" id="algo-grid"></section>
 
+    <!-- SOLO NOTE (solo mode only; group mode shows fairness + payouts) -->
+    <section class="window" id="win-solo" data-mode="solo">
+      <div class="window-bar"><span class="window-title">🎯 SOLO.EXE — HOW SOLO PAYS</span><span class="win-btns"><i data-act="min">_</i><i data-act="close">✕</i></span></div>
+      <div class="window-body">
+        <p class="solo-note">Find a block and the coinbase pays <strong>your address directly</strong> — the full block reward, no splits, no pool fee, nothing to reconcile. Miners connect with their own ITC address as the username; blocks land in Blocks Found the moment the chain accepts them.</p>
+      </div>
+      <div class="win-status"><span class="ws-pane grow">MODE: SOLO</span><span class="ws-pane">SET BY OPERATOR ENV · ITC_&lt;ALGO&gt;_SCHEME</span></div>
+    </section>
+
     <!-- WORKERS + BLOCKS -->
     <section class="two-col">
-      <div class="panel">
-        <div class="panel-head"><h2>Miners</h2><span class="panel-note" id="workers-note"></span></div>
-        <div class="table-wrap">
-          <table class="table" id="workers-table">
-            <thead><tr><th>Worker</th><th>Algo</th><th class="num">Hashrate</th><th class="num">Shares</th><th class="num">Invalid</th><th>Last share</th><th></th></tr></thead>
-            <tbody></tbody>
-          </table>
+      <div class="window" id="win-miners">
+        <div class="window-bar"><span class="window-title">👷 MINERS.EXE</span><span class="win-btns"><i data-act="min">_</i><i data-act="max">▢</i><i data-act="close">✕</i></span></div>
+        <div class="window-body">
+          <div class="panel-head"><h2>Miners</h2><span class="panel-note" id="workers-note"></span></div>
+          <div class="table-wrap">
+            <table class="table" id="workers-table">
+              <thead><tr><th>Worker</th><th>Algo</th><th class="num">Hashrate</th><th class="num">Shares</th><th class="num">Invalid</th><th>Last share</th><th></th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div class="empty hidden" id="workers-empty">No miners connected yet. Point one at a stratum port above and it will appear here within seconds.</div>
         </div>
-        <div class="empty hidden" id="workers-empty">No miners connected yet. Point one at a stratum port above and it will appear here within seconds.</div>
       </div>
 
-      <div class="panel">
-        <div class="panel-head"><h2>Blocks found</h2><span class="panel-note">newest first</span></div>
-        <div class="blocks-list" id="blocks-list"></div>
-        <div class="empty hidden" id="blocks-empty">No blocks yet. The first one gets a parade.</div>
+      <div class="window" id="win-blocks">
+        <div class="window-bar"><span class="window-title">🧱 BLOCKS.EXE</span><span class="win-btns"><i data-act="min">_</i><i data-act="max">▢</i><i data-act="close">✕</i></span></div>
+        <div class="window-body">
+          <div class="panel-head"><h2>Blocks found</h2><span class="panel-note">newest first</span></div>
+          <div class="blocks-list" id="blocks-list"></div>
+          <div class="empty hidden" id="blocks-empty">No blocks yet. The first one gets a parade. 🎺</div>
+        </div>
       </div>
     </section>
 
     <!-- FAIRNESS -->
-    <section class="panel fairness">
-      <div class="panel-head">
-        <h2>Provable fairness</h2>
-        <span class="verdict" id="reconcile-verdict">checking…</span>
+    <section class="window fairness" id="win-fairness" data-mode="group">
+      <div class="window-bar"><span class="window-title">⚖️ FAIRNESS.EXE — PROVABLE PAYOUTS</span><span class="win-btns"><i data-act="min">_</i><i data-act="max">▢</i><i data-act="close">✕</i></span></div>
+      <div class="window-body">
+        <div class="panel-head">
+          <h2>Provable fairness</h2>
+          <span class="verdict" id="reconcile-verdict">checking…</span>
+        </div>
+        <p class="fairness-lede">Every settled block publishes its complete payout split. The pool's books must balance to the satoshi — rewards in, credits out, fees taken — and anyone can recompute any split from the raw share ledger.</p>
+        <div class="fairness-stats" id="fairness-stats"></div>
+        <div class="equation mono" id="reconcile-equation"></div>
+        <h3 class="subhead">Settled block breakdowns</h3>
+        <div class="breakdown-list" id="breakdown-list"></div>
+        <div class="empty hidden" id="breakdown-empty">No settled group blocks yet. In solo mode the coinbase pays the finder directly, so there is nothing to split.</div>
       </div>
-      <p class="fairness-lede">Every settled block publishes its complete payout split. The pool's books must balance to the satoshi — rewards in, credits out, fees taken — and anyone can recompute any split from the raw share ledger.</p>
-      <div class="fairness-stats" id="fairness-stats"></div>
-      <div class="equation mono" id="reconcile-equation"></div>
-      <h3 class="subhead">Settled block breakdowns</h3>
-      <div class="breakdown-list" id="breakdown-list"></div>
-      <div class="empty hidden" id="breakdown-empty">No settled group blocks yet. In solo mode the coinbase pays the finder directly, so there is nothing to split.</div>
+      <div class="win-status"><span class="ws-pane grow">BOOKS MUST BALANCE TO THE SATOSHI</span><span class="ws-pane">LEDGER: PUBLIC</span></div>
     </section>
 
     <!-- PAYOUTS -->
-    <section class="panel">
-      <div class="panel-head"><h2>Payouts</h2><span class="panel-note" id="payouts-note"></span></div>
-      <div class="payouts-list" id="payouts-list"></div>
-      <div class="empty hidden" id="payouts-empty">No payout batches yet.</div>
+    <section class="window" id="win-payouts" data-mode="group">
+      <div class="window-bar"><span class="window-title">💸 PAYOUTS.EXE</span><span class="win-btns"><i data-act="min">_</i><i data-act="max">▢</i><i data-act="close">✕</i></span></div>
+      <div class="window-body">
+        <div class="panel-head"><h2>Payouts</h2><span class="panel-note" id="payouts-note"></span></div>
+        <div class="payouts-list" id="payouts-list"></div>
+        <div class="empty hidden" id="payouts-empty">No payout batches yet.</div>
+      </div>
     </section>
 
     <!-- MINER LOOKUP -->
-    <section class="panel">
-      <div class="panel-head"><h2>Find your miner</h2><span class="panel-note">by payout address</span></div>
-      <form class="lookup" id="lookup-form">
-        <input class="lookup-input mono" id="lookup-input" type="text" spellcheck="false" autocomplete="off" placeholder="itc1… your payout address">
-        <button class="btn-gold" type="submit">Look up</button>
-      </form>
-      <div id="miner-result"></div>
+    <section class="window" id="win-lookup">
+      <div class="window-bar"><span class="window-title">🔍 FIND_MINER.EXE</span><span class="win-btns"><i data-act="min">_</i><i data-act="max">▢</i><i data-act="close">✕</i></span></div>
+      <div class="window-body">
+        <div class="panel-head"><h2>Find your miner</h2><span class="panel-note">by payout address</span></div>
+        <form class="lookup" id="lookup-form">
+          <input class="lookup-input mono" id="lookup-input" type="text" spellcheck="false" autocomplete="off" placeholder="itc1… your payout address">
+          <button class="btn-gold" type="submit">LOOK UP</button>
+        </form>
+        <div id="miner-result"></div>
+      </div>
+    </section>
+
+    <!-- ABOUT (hidden until opened) -->
+    <section class="window hidden" id="win-about">
+      <div class="window-bar"><span class="window-title">ℹ ABOUT INTERCHAINED OS</span><span class="win-btns"><i data-act="close">✕</i></span></div>
+      <div class="window-body about-body">
+        <img class="about-logo" src="logo.png" alt="Interchained coin">
+        <p class="about-name">INTERCHAINED OS '98</p>
+        <p class="about-line">Tri-PoW Mining Pool · SHA256 + Yespower + Ethash</p>
+        <p class="about-line">Chain activated at block 913,982 · First tri-PoW block: Yespower, mined by the operator's own CPU.</p>
+        <p class="about-line dim">One chain. Three proofs of work. Every payout recomputable from the public share ledger. No trust required — the books balance or the seal turns red.</p>
+        <button class="btn-gold" id="about-ok" type="button">OK</button>
+      </div>
     </section>
 
     <footer class="footer">
-      <div class="footer-brand">
-        <svg class="brand-mark small" viewBox="0 0 32 32" aria-hidden="true"><circle cx="13" cy="16" r="8" fill="none" stroke="currentColor" stroke-width="3"/><circle cx="21" cy="16" r="8" fill="none" stroke="currentColor" stroke-width="3" opacity=".55"/></svg>
-        <span>INTERCHAINED · ITC</span>
-      </div>
+      <div class="footer-brand">INTERCHAINED · ITC</div>
       <div class="footer-note">One chain. Three proofs of work. Every payout recomputable.</div>
       <div class="footer-links mono">
         <a href="/api/stats">/api/stats</a><a href="/api/blocks">/api/blocks</a><a href="/api/workers">/api/workers</a><a href="/api/reconcile">/api/reconcile</a><a href="/api/breakdowns">/api/breakdowns</a>
@@ -114,6 +186,68 @@
     </footer>
   </main>
 
+  <!-- START HUB — Discord-style comms + OS navigation -->
+  <div id="start-hub" class="hidden">
+    <div class="hub-rail">
+      <img class="hub-logo" src="logo.png" alt="Interchained coin">
+      <div class="hub-rail-label">OS '98</div>
+      <button type="button" data-open="win-hero" title="Pool Overview">🖥</button>
+      <button type="button" data-open="win-miners" title="Miners">👷</button>
+      <button type="button" data-open="win-blocks" title="Blocks Found">🧱</button>
+      <button type="button" data-open="win-fairness" data-mode="group" title="Provable Fairness">⚖️</button>
+      <button type="button" data-open="win-payouts" data-mode="group" title="Payouts">💸</button>
+      <button type="button" data-open="win-lookup" title="Find Your Miner">🔍</button>
+      <div class="hub-rail-sep"></div>
+      <button type="button" id="sm-saver" title="Screensaver">✨</button>
+      <button type="button" data-open="win-about" title="About">ℹ</button>
+      <button type="button" id="sm-shutdown" title="Shut Down">⏻</button>
+    </div>
+    <div class="hub-channels">
+      <div class="hub-ch-head">POOL COMMS</div>
+      <button type="button" class="hub-ch active" data-ch="announcements"># announcements</button>
+      <button type="button" class="hub-ch" data-ch="block-feed"># block-feed</button>
+      <button type="button" class="hub-ch" data-ch="miner-chat"># miner-chat</button>
+      <button type="button" class="hub-ch" data-ch="pool-chat"># pool-chat</button>
+      <button type="button" class="hub-ch" data-ch="fairness" data-mode="group"># fairness</button>
+      <button type="button" class="hub-ch" data-ch="payouts" data-mode="group"># payouts</button>
+      <div class="hub-ch-foot mono" id="hub-mode-line">MODE: SOLO</div>
+    </div>
+    <div class="hub-main">
+      <div class="hub-head"><span class="hub-hash">#</span><span id="hub-channel-name">announcements</span><span class="hub-topic" id="hub-topic"></span><button type="button" class="hub-close" id="hub-close" title="Close">✕</button></div>
+      <div class="hub-messages" id="hub-messages"></div>
+      <div class="hub-inputrow">
+        <input id="hub-input" type="text" autocomplete="off" spellcheck="false" placeholder="Message — try /help, /stats, or paste an itc1… address">
+        <button class="btn-gold" id="hub-send" type="button">SEND</button>
+      </div>
+    </div>
+    <div class="hub-members">
+      <div class="hub-mem-head">ONLINE</div>
+      <div id="hub-members"></div>
+    </div>
+  </div>
+
+  <!-- TOASTS -->
+  <div id="toasts" aria-hidden="true"></div>
+
+  <nav class="taskbar">
+    <button class="start-btn" id="start-btn" type="button">▶ START<span id="start-dot" class="hidden"></span></button>
+    <div id="task-btns"></div>
+    <span class="task-tray"><button class="tray-snd" id="snd-btn" type="button" title="Toggle 8-bit sounds">🔇</button><span class="tray-coin">ITC ▲ LIVE</span><span class="mono" id="task-clock">--:--</span></span>
+  </nav>
+
+  <script>
+    (function () {
+      var c = document.getElementById('task-clock');
+      function tick() {
+        var d = new Date();
+        function p(n) { return (n < 10 ? '0' : '') + n; }
+        c.textContent = p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+      }
+      tick(); setInterval(tick, 1000);
+    })();
+  </script>
   <script src="app.js"></script>
+  <script src="retro.js"></script>
+  <script src="comms.js"></script>
 </body>
 </html>
