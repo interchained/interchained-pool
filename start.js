@@ -456,6 +456,44 @@ function setupApiServer(config, collector) {
         });
         var payCfg = config.payments || {};
 
+        /* Vitals cache (NEDB): the pool process keeps the network
+           snapshot and a 30 s hashrate sample series in the shared
+           vitals store, so ANY server of the dashboard (this
+           in-process API or the standalone one) can show the network
+           panel and seed the charts with history — and both survive
+           restarts. A missing engine degrades to no cache. */
+        var vitalsModule = null;
+        var vitalsStore = null;
+        try {
+            vitalsModule = require('./api/vitalsStore.js');
+            vitalsStore = vitalsModule.createVitalsStore({});
+        } catch (e) {
+            console.error('[api] vitals cache unavailable: ' + e.message);
+        }
+
+        /* Mirror ring: the last 24 h of samples (30 s cadence) plus
+           the latest network snapshot, mirrored to a JSON file that
+           OTHER servers of the dashboard read — NEDB is
+           single-opener, so they cannot open the store while this
+           process holds it. Seeded from the store at boot. */
+        var VITALS_RING_MAX = 2880;
+        var vitalsRing = [];
+        var lastMirroredHeight = null;
+        if (vitalsStore) {
+            try { vitalsRing = vitalsStore.listSamples({ limit: VITALS_RING_MAX }); }
+            catch (e) { vitalsRing = []; }
+        }
+        var writeVitalsMirror = function () {
+            if (!vitalsModule) return;
+            try {
+                vitalsModule.writeMirrorFile(null, {
+                    network: networkSnapshot,
+                    samples: vitalsRing
+                });
+                lastMirroredHeight = networkSnapshot ? networkSnapshot.height : null;
+            } catch (e) { /* cache is best-effort */ }
+        };
+
         /* Network vitals: poll the daemon and serve the TRI-POW
            fields (per-lane difficulty and hashrate). Those fields do
            NOT live on getblockchaininfo — the daemon serves them from
@@ -472,7 +510,13 @@ function setupApiServer(config, collector) {
             var lastPeers = null;
             var publishNetwork = function () {
                 var snap = buildNetworkSnapshot(lastMiningInfo, lastPeers);
-                if (snap) networkSnapshot = snap;
+                if (snap) {
+                    networkSnapshot = snap;
+                    if (vitalsStore) {
+                        try { vitalsStore.writeNetwork(snap); } catch (e) { /* cache is best-effort */ }
+                    }
+                    if (snap.height !== lastMirroredHeight) writeVitalsMirror();
+                }
             };
             var pollNetwork = function () {
                 netDaemon.cmd('getmininginfo', [], function (results) {
@@ -495,8 +539,35 @@ function setupApiServer(config, collector) {
             console.error('[api] network stats poller failed: ' + e.message);
         }
 
+        /* Hashrate sampler: one vitals sample every 30 s — the
+           pool's per-lane hashrates plus the current chain height.
+           This is the chain-health record the charts seed from. The
+           sample lands in NEDB (when the store opened), in the
+           mirror ring, and in the mirror file other servers read. */
+        if (collector && typeof collector.getHashrate === 'function') {
+            var takeSample = function () {
+                var sample = {
+                    t: Date.now(),
+                    height: networkSnapshot ? networkSnapshot.height : null,
+                    sha256: collector.getHashrate('sha256'),
+                    yespower: collector.getHashrate('yespower'),
+                    ethash: collector.getHashrate('ethash')
+                };
+                if (vitalsStore) {
+                    try { vitalsStore.appendSample(sample); } catch (e) { /* best-effort */ }
+                }
+                vitalsRing.push(sample);
+                while (vitalsRing.length > VITALS_RING_MAX) vitalsRing.shift();
+                writeVitalsMirror();
+            };
+            takeSample();
+            var sampleTimer = setInterval(takeSample, 30000);
+            if (sampleTimer.unref) sampleTimer.unref();
+        }
+
         var server = api.createServer({
             collector: collector,
+            vitalsStore: vitalsStore,
             networkProvider: function () { return networkSnapshot; },
             poolConfig: {
                 address: config.address || config.poolAddress,

@@ -3,8 +3,10 @@
 /* Interchained Tri-PoW pool dashboard — vanilla JS, no dependencies.
    All API-supplied strings are rendered with textContent / createElement.
    Static structure lives in index.html; this file only fills it in.
-   Charts are drawn from a client-side ring buffer of /api/stats samples:
-   no backend support needed, history starts when the page opens. */
+   Charts seed from the pool's NEDB vitals cache (/api/history — the
+   30 s sample series the pool process persists) and then keep
+   accumulating live /api/stats samples in a client-side ring buffer,
+   so the history survives reboots and page loads alike. */
 
 var ALGOS = ['sha256', 'yespower', 'ethash'];
 
@@ -167,6 +169,39 @@ function pushHistory(algo, value) {
   var arr = state.history[algo];
   arr.push({ t: Date.now(), v: Math.max(0, value || 0) });
   while (arr.length > HISTORY_MAX) arr.shift();
+}
+
+/* Seed the chart history from the vitals cache. The stored series is
+   30 s samples kept indefinitely; the chart ring holds HISTORY_MAX
+   points, so stride across the returned range to show ALL of it at
+   reduced resolution rather than only the newest slice. Live points
+   already collected stay (they are newer than any stored sample);
+   seeded points older than the first live point are prepended. */
+var historySeeded = false;
+function seedHistory() {
+  if (historySeeded) return;
+  historySeeded = true;
+  fetchJson('/api/history?limit=10000').then(function (res) {
+    if (!res || !res.available || !Array.isArray(res.samples) || !res.samples.length) return;
+    var samples = res.samples;
+    ALGOS.forEach(function (a) {
+      var live = state.history[a];
+      var cutoff = live.length ? live[0].t : Infinity;
+      var stored = [];
+      samples.forEach(function (s) {
+        if (s && typeof s.t === 'number' && s.t < cutoff) {
+          stored.push({ t: s.t, v: Math.max(0, asNumber(s[a]) || 0) });
+        }
+      });
+      if (!stored.length) return;
+      var stride = Math.max(1, Math.ceil(stored.length / HISTORY_MAX));
+      var seeded = [];
+      for (var i = 0; i < stored.length; i += stride) seeded.push(stored[i]);
+      if (seeded[seeded.length - 1] !== stored[stored.length - 1]) seeded.push(stored[stored.length - 1]);
+      state.history[a] = seeded.concat(live).slice(-HISTORY_MAX);
+    });
+    drawCharts();
+  }).catch(function () {});
 }
 
 function drawCharts() {
@@ -779,6 +814,7 @@ function init() {
     document.getElementById('lookup-input').value = prefill;
     lookupMiner(prefill);
   }
+  seedHistory();
   refresh();
   setInterval(refresh, REFRESH_MS);
   setInterval(updateUptime, 1000);

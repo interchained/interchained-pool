@@ -32,6 +32,8 @@ All API responses are JSON. Times are epoch milliseconds.
 | `GET /api/blocks` | JSON array of recent blocks across all algos, newest first: `[{ height, algo, hash, time }]`. Optional `?limit=N`. |
 | `GET /api/workers` | Flat JSON array across algos: `[{ worker, algo, hashrate, shares, invalidShares, connected, lastShareAt }]` (`hashrate` is the per-worker rolling estimate, `0` when no accepted shares remain in the window; `lastShareAt` may be `null`). |
 | `GET /api/config` | `{ solo: true, coin, algos: { sha256: { algo, stratumPort: 3333 }, yespower: { …, 3334 }, ethash: { …, 3335 } }, algoList: […same as a list…], stratumPorts: { sha256: 3333, yespower: 3334, ethash: 3335 } }` |
+| `GET /api/network` | Chain vitals `{ available, height, peers, difficulty: {sha256, yespower, ethash}, networkHashrate: {total, sha256, yespower, ethash}, updatedAt }`. Source order: the host process's live daemon poll (start.js `networkProvider`), then the NEDB vitals cache, then its JSON mirror — so any server of the dashboard can answer. `{available: false}` when none has data. |
+| `GET /api/history` | Hashrate history from the vitals cache: `{ available, samples: [{ t, height, sha256, yespower, ethash }] }` — 30 s samples written by the pool process. Optional `?since=<ms>&limit=<n>`. The dashboard seeds its charts from this. |
 | `GET /…` | Static file from `../ui/`, or the placeholder page at `/`. Unknown `/api/*` → `404` JSON. |
 
 ## Collector (`api/collector.js`)
