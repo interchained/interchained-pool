@@ -9,9 +9,12 @@
  * and asserts the wire conventions the dialect documents in the
  * ethashStratum.js header. Every check names the convention it pins:
  *
- *   C1 subscribe result shape: [[set_difficulty sub, notify sub],
- *      extranonce1, extranonce2Size=0] — Ethash has no extranonce;
- *      extranonce1 is a compatibility placeholder only.
+ *   C1 subscribe result shape: [[set_difficulty sub, notify sub,
+ *      "EthereumStratum/1.0.0"], extranonce1, extranonce2Size=0] —
+ *      Ethash has no extranonce; extranonce1 is a compatibility
+ *      placeholder only. (Protocol string added by the negotiation
+ *      change, PR #13; Rigel clients get the canonical dialect
+ *      instead — see lib/ethash/test-rigel-dialect.js.)
  *   C2 mining.notify param layout: [jobId, seedHash(32B hex),
  *      headerHash(32B hex), shareTarget(32B hex), cleanFlag] — seed
  *      BEFORE header, target is the SHARE target, all hashes 32 bytes
@@ -125,10 +128,14 @@ async function main() {
         Array.isArray(sub.result) && sub.result.length === 3 && sub.result[2] === 0 &&
         typeof sub.result[1] === 'string' && /^[0-9a-f]{8}$/.test(sub.result[1]),
         JSON.stringify(sub.result));
-    check('C1 subscribe: subscriptions name set_difficulty + notify with one subscription id',
-        Array.isArray(sub.result[0]) && sub.result[0].length === 2 &&
+    /* Shape updated for the subscribe-negotiation change (PR #13):
+       result[0] carries the protocol string as its third element —
+       lib/ethash/test-stratum-negotiation.js pins that shape. */
+    check('C1 subscribe: subscriptions name set_difficulty + notify with one subscription id, protocol string third',
+        Array.isArray(sub.result[0]) && sub.result[0].length === 3 &&
         sub.result[0][0][0] === 'mining.set_difficulty' && sub.result[0][1][0] === 'mining.notify' &&
-        sub.result[0][0][1] === sub.result[0][1][1] && typeof sub.result[0][0][1] === 'string');
+        sub.result[0][0][1] === sub.result[0][1][1] && typeof sub.result[0][0][1] === 'string' &&
+        sub.result[0][2] === 'EthereumStratum/1.0.0');
     check('C1 subscribe: error is null', sub.error === null);
 
     var notify = await c1.waitFor(function (m) { return m.method === 'mining.notify'; }, 'notify after subscribe');
