@@ -218,6 +218,12 @@ function buildPoolOptions(config, entry) {
             ? config.jobRebroadcastTimeout : 55,
         connectionTimeout: (typeof config.connectionTimeout === 'number')
             ? config.connectionTimeout : 600,
+        /* Ethash stratum keepalive heartbeat (ms): the adapter re-sends
+           the current job to silent miners at this cadence so their
+           connections never sit idle. Only the Ethash adapter reads
+           this; the classic lanes have the 55s rebroadcast chain. */
+        heartbeatIntervalMs: (typeof config.heartbeatIntervalMs === 'number')
+            ? config.heartbeatIntervalMs : 30000,
         emitInvalidBlockHashes: false,
         tcpProxyProtocol: false,
 
@@ -323,6 +329,7 @@ function createPools(config) {
                 try {
                     pool.ethashAdapter = ethashPool.attachEthash(pool, {
                         port: pool.options.ethashStratumPort,
+                        heartbeatIntervalMs: pool.options.heartbeatIntervalMs,
                         authorizeFn: authorizeFn,
                         logger: function (severity, text) {
                             console.log('[ethash] ' + severity + ': ' + text);
