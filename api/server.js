@@ -18,6 +18,7 @@ const { URL } = require('url');
 const StatsCollector = require('./collector');
 const payoutsBreakdown = require('../lib/payouts/breakdown');
 const payoutsReconcile = require('../lib/payouts/reconcile');
+const chatStoreModule = require('./chatStore');
 
 const ALGOS = ['sha256', 'yespower', 'ethash'];
 const STRATUM_PORTS = { sha256: 3333, yespower: 3334, ethash: 3335 };
@@ -127,6 +128,7 @@ const CONTENT_TYPES = {
   '.svg': 'image/svg+xml',
   '.ico': 'image/x-icon',
   '.webp': 'image/webp',
+  '.wasm': 'application/wasm',
   '.woff': 'font/woff',
   '.woff2': 'font/woff2',
   '.txt': 'text/plain; charset=utf-8',
@@ -326,6 +328,58 @@ function createServer(options) {
     opts.poolConfig && typeof opts.poolConfig === 'object' ? opts.poolConfig : null;
   const readStore = () => loadPayoutsStore(payoutsFile);
 
+  /* Pool chat (NEDB embedded — see api/chatStore.js). The store is
+     created lazily on the first chat request so a missing
+     nedb-engine install degrades chat to 503 and nothing else. */
+  let chat = null;
+  const getChat = () => {
+    if (!chat) chat = chatStoreModule.createChatStore({ dir: opts.chatDir });
+    return chat;
+  };
+  const chatRate = new Map(); // ip -> { last: ts, minute: [ts] }
+  const chatRateOk = (ip) => {
+    const now = Date.now();
+    let rec = chatRate.get(ip);
+    if (!rec) { rec = { last: 0, minute: [] }; chatRate.set(ip, rec); }
+    rec.minute = rec.minute.filter((t) => now - t < 60000);
+    if (now - rec.last < 1200) return false;
+    if (rec.minute.length >= 20) return false;
+    rec.last = now;
+    rec.minute.push(now);
+    return true;
+  };
+  const handleChatPost = (req, res) => {
+    const ip = (req.socket && req.socket.remoteAddress) || 'unknown';
+    if (!chatRateOk(ip)) {
+      sendJson(res, 429, { error: 'slow down — one message per second or so' });
+      return;
+    }
+    let size = 0;
+    const chunks = [];
+    req.on('data', (chunk) => {
+      size += chunk.length;
+      if (size > 8192) {
+        sendJson(res, 413, { error: 'message too large' });
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => {
+      let body;
+      try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+      catch (_) { sendJson(res, 400, { error: 'invalid JSON' }); return; }
+      try {
+        const message = getChat().post(body && body.author, body && body.text);
+        sendJson(res, 201, { message });
+      } catch (e) {
+        if (e && e.code === 'CHAT_BAD_MESSAGE') sendJson(res, 400, { error: e.message });
+        else sendJson(res, 503, { error: 'chat unavailable' });
+      }
+    });
+    req.on('error', () => { /* client went away; nothing to store */ });
+  };
+
   const server = http.createServer((req, res) => {
     let parsed;
     try {
@@ -335,6 +389,32 @@ function createServer(options) {
       return;
     }
     const pathname = parsed.pathname;
+
+    // ------------------------------------------------------------ pool chat
+    if (pathname === '/api/chat') {
+      if (req.method === 'POST') { handleChatPost(req, res); return; }
+      if (req.method === 'GET' || req.method === 'HEAD') {
+        try {
+          const store = getChat();
+          const limit = parsed.searchParams.get('limit');
+          sendJson(res, 200, { messages: store.list(limit ? Number(limit) : undefined), status: store.status() });
+        } catch (e) {
+          sendJson(res, 503, { error: 'chat unavailable' });
+        }
+        return;
+      }
+      sendJson(res, 405, { error: 'method not allowed' });
+      return;
+    }
+    if (pathname === '/api/chat/status') {
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        sendJson(res, 405, { error: 'method not allowed' });
+        return;
+      }
+      try { sendJson(res, 200, getChat().status()); }
+      catch (e) { sendJson(res, 503, { error: 'chat unavailable' }); }
+      return;
+    }
 
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       sendJson(res, 405, { error: 'method not allowed' });
