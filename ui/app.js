@@ -688,6 +688,63 @@ function applyMode() {
 
 /* ---------------- refresh ---------------- */
 
+/* ---------------- network vitals (daemon, via /api/network) -------- */
+function fmtDiff(v) {
+  if (v == null || !isFinite(v)) return '—';
+  if (v >= 1000) return v.toLocaleString('en-US', { maximumFractionDigits: 1 });
+  if (v >= 100) return v.toFixed(1);
+  if (v >= 1) return v.toFixed(3);
+  if (v >= 0.01) return v.toFixed(4);
+  return v.toFixed(6);
+}
+function gid(id) { return document.getElementById(id); }
+function renderNetwork(net) {
+  var statusEl = gid('net-status');
+  var heroNet = gid('hero-net');
+  if (!net || !net.available) {
+    gid('net-height').textContent = '—';
+    gid('net-total-hr').textContent = '—';
+    gid('net-peers').textContent = '—';
+    gid('net-rows').textContent = '';
+    if (statusEl) statusEl.textContent = 'NETWORK: UNAVAILABLE (STANDALONE API)';
+    if (heroNet) heroNet.textContent = '';
+    return;
+  }
+  gid('net-height').textContent = Number(net.height).toLocaleString('en-US');
+  gid('net-total-hr').textContent = fmtHashrate(net.networkHashrate ? net.networkHashrate.total : null);
+  gid('net-peers').textContent = net.peers != null ? String(net.peers) : '—';
+  var rows = gid('net-rows');
+  rows.textContent = '';
+  ALGOS.forEach(function (algo) {
+    var meta = ALGO_META[algo];
+    var row = document.createElement('div');
+    row.className = 'net-row';
+    row.style.borderLeftColor = meta.color;
+    var name = document.createElement('span');
+    name.className = 'net-row-name';
+    name.style.color = meta.color;
+    name.textContent = meta.label.toUpperCase();
+    var diff = document.createElement('span');
+    diff.className = 'net-row-val';
+    diff.textContent = 'difficulty ' + fmtDiff(net.difficulty ? net.difficulty[algo] : null);
+    var hr = document.createElement('span');
+    hr.className = 'net-row-val';
+    hr.textContent = 'network ' + fmtHashrate(net.networkHashrate ? net.networkHashrate[algo] : null);
+    row.appendChild(name);
+    row.appendChild(diff);
+    row.appendChild(hr);
+    rows.appendChild(row);
+  });
+  if (statusEl) {
+    statusEl.textContent = 'NETWORK: LIVE · UPDATED ' + (net.updatedAt ? new Date(net.updatedAt).toLocaleTimeString('en-US', { hour12: false }) : '—');
+  }
+  if (heroNet) {
+    heroNet.textContent = '🌐 NETWORK ' + fmtHashrate(net.networkHashrate ? net.networkHashrate.total : null) +
+      ' · HEIGHT ' + Number(net.height).toLocaleString('en-US') +
+      (net.peers != null ? ' · ' + net.peers + ' PEERS' : '');
+  }
+}
+
 function refresh() {
   var jobs = [
     fetchJson('/health').then(function () { setApiStatus(true, 'live'); }).catch(function () { setApiStatus(false, 'api offline'); }),
@@ -695,6 +752,7 @@ function refresh() {
     fetchJson('/api/config').then(renderConfig).catch(function () {}),
     fetchJson('/api/workers').then(renderWorkers).catch(function () {}),
     fetchJson('/api/payouts').then(renderPayouts).catch(function () {}),
+    fetchJson('/api/network').then(renderNetwork).catch(function () { renderNetwork(null); }),
     fetchJson('/api/reconcile').then(renderReconcile).catch(function () { renderReconcile(null); })
   ];
   var blocksPromise = fetchJson('/api/blocks?limit=30').catch(function () { return []; });
