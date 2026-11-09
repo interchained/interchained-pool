@@ -59,8 +59,28 @@ A share enters the payout ledger only through `attachPayouts`
 
 ## How a block's reward is split
 
-For group schemes (solo pays the finder directly in the coinbase and
-never enters this pipeline):
+Solo blocks never enter the split / balances / batch pipeline below —
+the coinbase pays the finder directly. But a solo block that is
+**confirmed** is still *published* (breakdown and reconciliation, see
+below) with its own deterministic semantics, because "not processed"
+must never read as "not accounted":
+
+- The block record's reward is the gross coinbase subsidy (that is
+  what `attach.js` records from the template's `coinbasevalue`).
+- The **governance carve-out** — 73% of the subsidy, chain consensus
+  (the daemon's `GOVERNANCE_BPS`) — is paid to the governance wallet
+  by the coinbase itself. It is **never pool revenue** and is never
+  credited to any miner.
+- The remainder is the **pool-creditable amount**: the finder is
+  credited **100%** of it, fee **0**, paid by the coinbase itself —
+  so in reconciliation a settled solo block shows as settled and
+  already paid out, never as a pending balance or carry-over, and it
+  never enters the FIFO model. A recorded solo split that disagrees
+  with this derivation (subsidy − governance) is reported as a
+  `solo-split-mismatch` discrepancy, and its breakdown shows
+  `matchesRecorded: false`.
+
+For group schemes:
 
 - **PROP**: all shares of the block's algo in the round
   `(prevBlockTime, block.time]` share the reward by weight.
@@ -103,7 +123,12 @@ and batches.
   amount (sat + coins), paid-out amount, and carry-over in / created /
   consumed. The breakdown shows the **recorded** split and an
   **independent recompute** from the raw shares (same code as the
-  verifier), with a flag when they differ.
+  verifier), with a flag when they differ. For a solo block there is
+  no share window: the breakdown additionally shows the gross subsidy,
+  the governance carve-out and the pool-creditable amount, the finder
+  credited 100% of the creditable amount and marked paid out (by the
+  coinbase), and the recompute is the same derivation any miner can
+  redo from the block's coinbase alone.
 - `GET /api/breakdowns`: the same summary for every recorded block.
 - The dashboard renders this as a block-explorer panel with the fee
   line and a totals check, next to the reconciliation readout.
@@ -112,12 +137,19 @@ and batches.
 
 `GET /api/reconcile` proves, from the recorded ledger alone:
 
-- per settled block: `reward == sum(credits) + fee`;
+- per settled block: `reward == sum(credits) + fee` (for solo blocks,
+  `reward` is the pool-creditable amount — subsidy minus the
+  governance carve-out — and the per-block entry also carries the
+  gross subsidy and the carve-out itself, so nothing is hidden);
 - in aggregate: `rewardIn == payouts + fees + carryOverDelta`, where
   `payouts` is the sum of the recorded batch amounts and
   `carryOverDelta` is computed independently by the FIFO model;
   recorded `balances.pending` / `balances.paid` are cross-checked
-  against the same model.
+  against the same model. When settled solo blocks are present, their
+  coinbase-paid credits are totalled separately as `soloSettledSat`
+  and the published equation reads
+  `rewardIn == payouts + fees + carryOverDelta + soloSettledSat`;
+  `settledBlocks` counts solo blocks too.
 
 Any mismatch is returned as a **discrepancy object** (`kind`, expected
 vs actual satoshis, delta, message) and `balanced: false`. Nothing is
