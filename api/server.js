@@ -454,6 +454,17 @@ function createServer(options) {
       sendJson(res, 200, configPayload(poolConfig));
       return;
     }
+    if (pathname === '/api/network') {
+      /* Chain vitals from the daemon, polled by the host process
+         (start.js) and injected as options.networkProvider. The
+         standalone server has no daemon wiring: report that
+         honestly instead of inventing numbers. */
+      let net = null;
+      try { net = typeof opts.networkProvider === 'function' ? opts.networkProvider() : null; }
+      catch (_) { net = null; }
+      sendJson(res, 200, net || { available: false });
+      return;
+    }
     // ------------------------------------------------------ phase 2 API
     if (pathname === '/api/payouts') {
       const store = readStore();

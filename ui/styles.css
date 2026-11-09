@@ -698,3 +698,14 @@ body::-webkit-scrollbar-thumb, .hub-messages::-webkit-scrollbar-thumb, .window-b
 @media (prefers-reduced-motion: reduce) {
   .brand-ticker-track { animation: none; }
 }
+
+/* ==== NETWORK VITALS ============================================== */
+.hero-net { margin-top: 7px; font-size: 15px; letter-spacing: 1px; color: #9fe3ab; min-height: 18px; }
+.net-big { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 14px; }
+.net-cell { background: rgba(11,16,38,.45); border: 1px solid rgba(255,255,255,.14); border-radius: 6px; padding: 12px 10px; text-align: center; }
+.net-num { font-family: 'Press Start 2P', monospace; font-size: clamp(13px, 1.9vw, 20px); color: #ffd83d; text-shadow: 0 0 12px rgba(255,216,61,.35); }
+.net-cap { margin-top: 7px; font-family: 'VT323', monospace; font-size: 14px; letter-spacing: 2px; color: #aebfe3; }
+.net-row { display: flex; gap: 16px; align-items: baseline; padding: 8px 10px; border-left: 4px solid #888; background: rgba(255,255,255,.045); border-radius: 0 5px 5px 0; margin-bottom: 7px; flex-wrap: wrap; }
+.net-row-name { font-family: 'Press Start 2P', monospace; font-size: 9px; min-width: 92px; }
+.net-row-val { font-family: 'VT323', monospace; font-size: 17px; color: #e8eefc; letter-spacing: .5px; }
+@media (max-width: 700px) { .net-big { grid-template-columns: 1fr; } }

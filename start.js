@@ -427,8 +427,51 @@ function setupApiServer(config, collector) {
             };
         });
         var payCfg = config.payments || {};
+
+        /* Network vitals: poll the daemon's getblockchaininfo and
+           serve the TRI-POW fields (per-lane difficulty and
+           hashrate). The classic pool banners print the single
+           shared `difficulty` scalar for every lane; these are the
+           real per-lane numbers the dashboard shows. */
+        var networkSnapshot = null;
+        try {
+            var netDaemon = new daemonModule.interface(daemonList(config), function () {});
+            netDaemon.init();
+            var numOrNull = function (v) { return (typeof v === 'number' && isFinite(v)) ? v : null; };
+            var pollNetwork = function () {
+                netDaemon.cmd('getblockchaininfo', [], function (results) {
+                    var r = results && results[0];
+                    var info = r && r.response;
+                    if (!info || typeof info.blocks !== 'number') return;
+                    networkSnapshot = {
+                        available: true,
+                        height: info.blocks,
+                        peers: numOrNull(info.connections),
+                        difficulty: {
+                            sha256: numOrNull(info.difficulty_sha256),
+                            yespower: numOrNull(info.difficulty_yespower),
+                            ethash: numOrNull(info.difficulty_ethash)
+                        },
+                        networkHashrate: {
+                            total: numOrNull(info.networkhashps),
+                            sha256: numOrNull(info.networkhashps_sha256),
+                            yespower: numOrNull(info.networkhashps_yespower),
+                            ethash: numOrNull(info.networkhashps_ethash)
+                        },
+                        updatedAt: Date.now()
+                    };
+                });
+            };
+            pollNetwork();
+            var netTimer = setInterval(pollNetwork, 15000);
+            if (netTimer.unref) netTimer.unref();
+        } catch (e) {
+            console.error('[api] network stats poller failed: ' + e.message);
+        }
+
         var server = api.createServer({
             collector: collector,
+            networkProvider: function () { return networkSnapshot; },
             poolConfig: {
                 address: config.address || config.poolAddress,
                 algos: algosCfg,
