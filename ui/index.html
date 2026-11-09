@@ -3,282 +3,116 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Interchained Tri-PoW Mining Pool — SHA256, Yespower and Ethash">
+  <meta name="description" content="Interchained Tri-PoW Mining Pool — SHA256, Yespower and Ethash, one chain, three ways to mine it.">
   <title>Interchained — Tri-PoW Mining Pool</title>
   <link rel="stylesheet" href="styles.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='13' cy='16' r='8' fill='none' stroke='%23e3b341' stroke-width='3'/%3E%3Ccircle cx='21' cy='16' r='8' fill='none' stroke='%23e3b341' stroke-width='3' opacity='.55'/%3E%3C/svg%3E">
 </head>
 <body>
-  <div id="api-banner" class="banner" role="alert" hidden>
-    <span class="banner-text">API unreachable — showing last known data and retrying every 10 seconds.</span>
-    <button id="api-banner-dismiss" class="banner-dismiss" type="button" aria-label="Dismiss API warning">&times;</button>
-  </div>
+  <div class="bg-glow" aria-hidden="true"></div>
 
-  <header class="site-header">
-    <div class="header-inner">
-      <div class="brand">
-        <div class="wordmark">INTERCHAINED</div>
-        <div class="tagline">Tri-PoW Mining Pool</div>
+  <header class="topbar">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><circle cx="13" cy="16" r="8" fill="none" stroke="currentColor" stroke-width="3"/><circle cx="21" cy="16" r="8" fill="none" stroke="currentColor" stroke-width="3" opacity=".55"/></svg>
+      <div class="brand-text">
+        <div class="brand-name">INTERCHAINED</div>
+        <div class="brand-sub">TRI-PoW MINING POOL</div>
       </div>
-      <div class="header-meta">
-        <div class="status-line">
-          <span id="api-dot" class="status-dot status-unknown" aria-hidden="true"></span>
-          <span id="api-status-text" class="status-text">Connecting…</span>
-        </div>
-        <div class="uptime-line">
-          <span class="meta-label">Uptime</span>
-          <span id="uptime" class="uptime-value">—</span>
-        </div>
-      </div>
+    </div>
+    <div class="topbar-right">
+      <span class="status-chip" id="api-status"><span class="dot" id="api-dot"></span><span id="api-status-text">connecting</span></span>
+      <span class="status-chip mono" id="uptime-chip" title="Pool uptime">uptime —</span>
+      <span class="status-chip mono" id="height-chip" title="Latest block seen by the pool">⛓ —</span>
     </div>
   </header>
 
-  <main class="container">
-    <section aria-labelledby="algos-heading">
-      <h2 id="algos-heading" class="section-title">Algorithms</h2>
-      <div class="algo-grid">
+  <main class="wrap">
+    <div class="banner hidden" id="dryrun-banner">
+      <strong>Payments are in dry-run.</strong>
+      <span>Payout batches are computed and published, but no coins move until the operator enables live payments. Every split is still fully accounted below.</span>
+    </div>
 
-        <article class="algo-card" data-algo-card="sha256">
-          <div class="card-head">
-            <h3 class="algo-name">SHA256</h3>
-            <span class="badge badge-sha256">ASIC</span>
-            <span class="badge badge-scheme" data-field="scheme">—</span>
-          </div>
-          <div class="hashrate" data-field="hashrate">0 H/s</div>
-          <p class="waiting-note" data-field="waiting" hidden>Waiting for shares…</p>
-          <dl class="card-stats">
-            <div class="stat-row">
-              <dt>Workers</dt>
-              <dd data-field="workers">0</dd>
-            </div>
-            <div class="stat-row">
-              <dt>Shares accepted</dt>
-              <dd data-field="shares-accepted">0</dd>
-            </div>
-            <div class="stat-row">
-              <dt>Shares rejected</dt>
-              <dd data-field="shares-rejected">0</dd>
-            </div>
-          </dl>
-          <div class="last-block">
-            <span class="meta-label">Last block</span>
-            <span data-field="last-block">No blocks yet</span>
-          </div>
-        </article>
-
-        <article class="algo-card" data-algo-card="yespower">
-          <div class="card-head">
-            <h3 class="algo-name">Yespower</h3>
-            <span class="badge badge-yespower">CPU</span>
-            <span class="badge badge-scheme" data-field="scheme">—</span>
-          </div>
-          <div class="hashrate" data-field="hashrate">0 H/s</div>
-          <p class="waiting-note" data-field="waiting" hidden>Waiting for shares…</p>
-          <dl class="card-stats">
-            <div class="stat-row">
-              <dt>Workers</dt>
-              <dd data-field="workers">0</dd>
-            </div>
-            <div class="stat-row">
-              <dt>Shares accepted</dt>
-              <dd data-field="shares-accepted">0</dd>
-            </div>
-            <div class="stat-row">
-              <dt>Shares rejected</dt>
-              <dd data-field="shares-rejected">0</dd>
-            </div>
-          </dl>
-          <div class="last-block">
-            <span class="meta-label">Last block</span>
-            <span data-field="last-block">No blocks yet</span>
-          </div>
-        </article>
-
-        <article class="algo-card" data-algo-card="ethash">
-          <div class="card-head">
-            <h3 class="algo-name">Ethash</h3>
-            <span class="badge badge-ethash">GPU</span>
-            <span class="badge badge-scheme" data-field="scheme">—</span>
-          </div>
-          <div class="hashrate" data-field="hashrate">0 H/s</div>
-          <p class="waiting-note" data-field="waiting" hidden>Waiting for shares…</p>
-          <dl class="card-stats">
-            <div class="stat-row">
-              <dt>Workers</dt>
-              <dd data-field="workers">0</dd>
-            </div>
-            <div class="stat-row">
-              <dt>Shares accepted</dt>
-              <dd data-field="shares-accepted">0</dd>
-            </div>
-            <div class="stat-row">
-              <dt>Shares rejected</dt>
-              <dd data-field="shares-rejected">0</dd>
-            </div>
-          </dl>
-          <div class="last-block">
-            <span class="meta-label">Last block</span>
-            <span data-field="last-block">No blocks yet</span>
-          </div>
-        </article>
-
+    <!-- HERO -->
+    <section class="hero panel">
+      <div class="hero-main">
+        <div class="hero-label">POOL HASHRATE · ALL ALGORITHMS</div>
+        <div class="hero-value mono" id="hero-hashrate">—</div>
+        <div class="hero-sub" id="hero-sub">SHA256 · Yespower · Ethash — three difficulties, one chain.</div>
       </div>
+      <div class="hero-stats">
+        <div class="hero-stat"><div class="hero-stat-value mono" id="hero-workers">—</div><div class="hero-stat-label">miners online</div></div>
+        <div class="hero-stat"><div class="hero-stat-value mono" id="hero-blocks">—</div><div class="hero-stat-label">blocks found</div></div>
+        <div class="hero-stat"><div class="hero-stat-value mono" id="hero-shares">—</div><div class="hero-stat-label">shares accepted</div></div>
+        <div class="hero-stat"><div class="hero-stat-value mono" id="hero-reject">—</div><div class="hero-stat-label">reject rate</div></div>
+      </div>
+      <canvas id="hero-chart" class="hero-chart" aria-hidden="true"></canvas>
     </section>
 
-    <section aria-labelledby="workers-heading">
-      <h2 id="workers-heading" class="section-title">Workers</h2>
+    <!-- ALGO CARDS -->
+    <section class="algo-grid" id="algo-grid"></section>
+
+    <!-- WORKERS + BLOCKS -->
+    <section class="two-col">
       <div class="panel">
-        <p id="workers-empty" class="empty-note">Waiting for shares… No workers connected yet.</p>
+        <div class="panel-head"><h2>Miners</h2><span class="panel-note" id="workers-note"></span></div>
         <div class="table-wrap">
-          <table class="workers-table">
-            <thead>
-              <tr>
-                <th scope="col">Worker</th>
-                <th scope="col">Algo</th>
-                <th scope="col">Hashrate</th>
-                <th scope="col">Shares (valid / invalid)</th>
-                <th scope="col">Status</th>
-                <th scope="col">Last share</th>
-              </tr>
-            </thead>
-            <tbody id="workers-body"></tbody>
+          <table class="table" id="workers-table">
+            <thead><tr><th>Worker</th><th>Algo</th><th class="num">Hashrate</th><th class="num">Shares</th><th class="num">Invalid</th><th>Last share</th><th></th></tr></thead>
+            <tbody></tbody>
           </table>
         </div>
+        <div class="empty hidden" id="workers-empty">No miners connected yet. Point one at a stratum port above and it will appear here within seconds.</div>
       </div>
-    </section>
 
-    <section aria-labelledby="blocks-heading">
-      <h2 id="blocks-heading" class="section-title">Recent Blocks</h2>
       <div class="panel">
-        <p id="blocks-empty" class="empty-note">No blocks yet — waiting for the first block.</p>
-        <div class="table-wrap">
-          <table class="workers-table blocks-table">
-            <thead>
-              <tr>
-                <th scope="col">Height</th>
-                <th scope="col">Algo</th>
-                <th scope="col">Hash</th>
-                <th scope="col">Time</th>
-                <th scope="col">Distribution</th>
-              </tr>
-            </thead>
-            <tbody id="blocks-body"></tbody>
-          </table>
-        </div>
-        <ul id="blocks-list" class="blocks-list" hidden></ul>
+        <div class="panel-head"><h2>Blocks found</h2><span class="panel-note">newest first</span></div>
+        <div class="blocks-list" id="blocks-list"></div>
+        <div class="empty hidden" id="blocks-empty">No blocks yet. The first one gets a parade.</div>
       </div>
     </section>
 
-
-    <section aria-labelledby="payouts-heading">
-      <h2 id="payouts-heading" class="section-title">Pool Payouts</h2>
-      <div class="panel">
-        <div class="payout-summary">
-          <div class="stat-row"><dt>Pool fee</dt><dd id="payouts-fee">—</dd></div>
-          <div class="stat-row"><dt>Minimum payout</dt><dd id="payouts-min">—</dd></div>
-          <div class="stat-row"><dt>Confirmations required</dt><dd id="payouts-confirmations">—</dd></div>
-          <div class="stat-row"><dt>Mode</dt><dd><span id="payouts-mode" class="badge badge-mode">Not configured</span></dd></div>
-        </div>
-        <p id="payouts-empty" class="empty-note">No payout batches yet.</p>
-        <div class="table-wrap">
-          <table class="workers-table payouts-table">
-            <thead>
-              <tr>
-                <th scope="col">Time</th>
-                <th scope="col">Algo</th>
-                <th scope="col">Total</th>
-                <th scope="col">Miners paid</th>
-                <th scope="col">TxID</th>
-              </tr>
-            </thead>
-            <tbody id="payouts-body"></tbody>
-          </table>
-        </div>
+    <!-- FAIRNESS -->
+    <section class="panel fairness">
+      <div class="panel-head">
+        <h2>Provable fairness</h2>
+        <span class="verdict" id="reconcile-verdict">checking…</span>
       </div>
+      <p class="fairness-lede">Every settled block publishes its complete payout split. The pool's books must balance to the satoshi — rewards in, credits out, fees taken — and anyone can recompute any split from the raw share ledger.</p>
+      <div class="fairness-stats" id="fairness-stats"></div>
+      <div class="equation mono" id="reconcile-equation"></div>
+      <h3 class="subhead">Settled block breakdowns</h3>
+      <div class="breakdown-list" id="breakdown-list"></div>
+      <div class="empty hidden" id="breakdown-empty">No settled group blocks yet. In solo mode the coinbase pays the finder directly, so there is nothing to split.</div>
     </section>
 
-    <section aria-labelledby="miner-heading">
-      <h2 id="miner-heading" class="section-title">Miner Lookup</h2>
-      <div class="panel">
-        <form id="miner-form" class="miner-form">
-          <label class="miner-label" for="miner-address">ITC payout address</label>
-          <div class="miner-row">
-            <input id="miner-address" class="miner-input mono" type="text" placeholder="Enter your ITC address" autocomplete="off" spellcheck="false">
-            <button class="miner-btn" type="submit">Look up</button>
-          </div>
-        </form>
-        <p id="miner-notfound" class="empty-note" hidden>Miner not found — no shares or balances for that address.</p>
-        <p id="miner-empty" class="empty-note">Enter an address to see its shares, hashrate estimate and balances.</p>
-        <div id="miner-result" hidden>
-          <div class="table-wrap">
-            <table class="workers-table miner-table">
-              <thead>
-                <tr>
-                  <th scope="col">Algo</th>
-                  <th scope="col">Shares</th>
-                  <th scope="col">Hashrate est.</th>
-                  <th scope="col">Last share</th>
-                  <th scope="col">Pending</th>
-                  <th scope="col">Paid</th>
-                </tr>
-              </thead>
-              <tbody id="miner-body"></tbody>
-            </table>
-          </div>
-          <p class="miner-totals">Totals: <span id="miner-totals"></span></p>
-        </div>
+    <!-- PAYOUTS -->
+    <section class="panel">
+      <div class="panel-head"><h2>Payouts</h2><span class="panel-note" id="payouts-note"></span></div>
+      <div class="payouts-list" id="payouts-list"></div>
+      <div class="empty hidden" id="payouts-empty">No payout batches yet.</div>
+    </section>
+
+    <!-- MINER LOOKUP -->
+    <section class="panel">
+      <div class="panel-head"><h2>Find your miner</h2><span class="panel-note">by payout address</span></div>
+      <form class="lookup" id="lookup-form">
+        <input class="lookup-input mono" id="lookup-input" type="text" spellcheck="false" autocomplete="off" placeholder="itc1… your payout address">
+        <button class="btn-gold" type="submit">Look up</button>
+      </form>
+      <div id="miner-result"></div>
+    </section>
+
+    <footer class="footer">
+      <div class="footer-brand">
+        <svg class="brand-mark small" viewBox="0 0 32 32" aria-hidden="true"><circle cx="13" cy="16" r="8" fill="none" stroke="currentColor" stroke-width="3"/><circle cx="21" cy="16" r="8" fill="none" stroke="currentColor" stroke-width="3" opacity=".55"/></svg>
+        <span>INTERCHAINED · ITC</span>
       </div>
-    </section>
-
-    <section aria-labelledby="fairness-heading">
-      <h2 id="fairness-heading" class="section-title">Fairness &amp; Payout Breakdown</h2>
-      <div class="panel">
-        <p id="reconcile-summary" class="empty-note">Reconciliation: loading…</p>
-        <p id="reconcile-equation" class="miner-totals" hidden></p>
-        <ul id="reconcile-discrepancies" class="blocks-list" hidden></ul>
-        <div class="miner-row">
-          <label class="miner-label" for="fairness-block-select">Settled block</label>
-          <select id="fairness-block-select" class="miner-input"></select>
-          <button id="fairness-load" class="miner-btn" type="button">Show breakdown</button>
-        </div>
-        <p id="fairness-empty" class="empty-note">No settled blocks yet — breakdowns appear once a block's payout split is recorded.</p>
-        <div id="fairness-result" hidden>
-          <p id="fairness-meta" class="miner-totals"></p>
-          <p id="fairness-window" class="miner-totals"></p>
-          <div class="table-wrap">
-            <table class="workers-table fairness-table">
-              <thead>
-                <tr>
-                  <th scope="col">Miner</th>
-                  <th scope="col">Shares</th>
-                  <th scope="col">Weight</th>
-                  <th scope="col">Payout</th>
-                  <th scope="col">Paid out</th>
-                  <th scope="col">Carry-over created</th>
-                  <th scope="col">Carry-over consumed</th>
-                </tr>
-              </thead>
-              <tbody id="fairness-body"></tbody>
-            </table>
-          </div>
-          <p id="fairness-totals" class="miner-totals"></p>
-          <p class="miner-totals">Verify independently: download
-            <a id="fairness-ledger-link" href="#" rel="noopener">this block's raw ledger export</a>
-            and run <code>node scripts/verify-payout.js &lt;export.json&gt;</code> from the pool repo — no trust in this dashboard required.</p>
-        </div>
+      <div class="footer-note">One chain. Three proofs of work. Every payout recomputable.</div>
+      <div class="footer-links mono">
+        <a href="/api/stats">/api/stats</a><a href="/api/blocks">/api/blocks</a><a href="/api/workers">/api/workers</a><a href="/api/reconcile">/api/reconcile</a><a href="/api/breakdowns">/api/breakdowns</a>
       </div>
-    </section>
-
-    <section aria-labelledby="connect-heading">
-      <h2 id="connect-heading" class="section-title">Connect a Miner</h2>
-      <p class="section-note">Solo mining pool. Point your miner at the port for its algorithm. Replace the address placeholder with your Interchained address.</p>
-      <div id="connection-list" class="connection-grid"></div>
-    </section>
+    </footer>
   </main>
-
-  <footer class="site-footer">
-    <span>INTERCHAINED · Tri-PoW · SHA256 + Yespower + Ethash</span>
-    <span class="footer-note">Dashboard refreshes every 10 seconds.</span>
-  </footer>
 
   <script src="app.js"></script>
 </body>
