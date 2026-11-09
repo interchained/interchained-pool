@@ -23,6 +23,7 @@ var state = {
   mode: null,
   payments: null,
   poolAddress: null,
+  stratumHost: null,
   startedAtMs: null,
   uptimeBaseSeconds: null,
   uptimeFetchedAtMs: null,
@@ -241,7 +242,10 @@ function schemeBadge(algo) {
 }
 
 function connectUrl(algo) {
-  var host = window.location.hostname || 'pool.interchained.org';
+  /* The stratum host is a deployment property served by /api/config —
+     NOT the hostname this page was browsed through (viewing via
+     mine.interchained.org used to put that in the connect strings). */
+  var host = state.stratumHost || 'stratum.interchained.org';
   return 'stratum+tcp://' + host + ':' + state.ports[algo];
 }
 
@@ -659,6 +663,7 @@ function renderConfig(cfg) {
   }
   if (cfg.payments) state.payments = cfg.payments;
   if (cfg.poolAddress) state.poolAddress = cfg.poolAddress;
+  if (cfg.stratumHost) state.stratumHost = cfg.stratumHost;
   applyMode();
   var dry = state.mode === 'group' && state.payments && state.payments.dryRun;
   document.getElementById('dryrun-banner').classList.toggle('hidden', !dry);

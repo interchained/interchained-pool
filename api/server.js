@@ -193,6 +193,15 @@ function configPayload(poolConfig) {
     dryRun: payments.dryRun,
     poolAddress:
       poolConfig && poolConfig.address != null ? poolConfig.address : null,
+    // The host miners should point at. A deployment property (pool
+    // config / ITC_STRATUM_HOST), never the hostname the dashboard
+    // happens to be viewed through — the UI used to echo
+    // location.hostname, so browsing via any other name (e.g.
+    // mine.interchained.org) produced wrong connect strings.
+    stratumHost:
+      poolConfig && poolConfig.stratumHost
+        ? String(poolConfig.stratumHost)
+        : 'stratum.interchained.org',
     poolConfigProvided: !!poolConfig,
   };
 }
