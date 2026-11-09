@@ -751,7 +751,7 @@ function renderNetwork(net) {
     return;
   }
   gid('net-height').textContent = Number(net.height).toLocaleString('en-US');
-  gid('net-total-hr').textContent = fmtHashrate(net.networkHashrate ? net.networkHashrate.total : null);
+  gid('net-total-hr').textContent = formatHashrate(net.networkHashrate ? net.networkHashrate.total : null);
   gid('net-peers').textContent = net.peers != null ? String(net.peers) : '—';
   var rows = gid('net-rows');
   rows.textContent = '';
@@ -769,7 +769,7 @@ function renderNetwork(net) {
     diff.textContent = 'difficulty ' + fmtDiff(net.difficulty ? net.difficulty[algo] : null);
     var hr = document.createElement('span');
     hr.className = 'net-row-val';
-    hr.textContent = 'network ' + fmtHashrate(net.networkHashrate ? net.networkHashrate[algo] : null);
+    hr.textContent = 'network ' + formatHashrate(net.networkHashrate ? net.networkHashrate[algo] : null);
     row.appendChild(name);
     row.appendChild(diff);
     row.appendChild(hr);
@@ -779,7 +779,7 @@ function renderNetwork(net) {
     statusEl.textContent = 'NETWORK: LIVE · UPDATED ' + (net.updatedAt ? new Date(net.updatedAt).toLocaleTimeString('en-US', { hour12: false }) : '—');
   }
   if (heroNet) {
-    heroNet.textContent = '🌐 NETWORK ' + fmtHashrate(net.networkHashrate ? net.networkHashrate.total : null) +
+    heroNet.textContent = '🌐 NETWORK ' + formatHashrate(net.networkHashrate ? net.networkHashrate.total : null) +
       ' · HEIGHT ' + Number(net.height).toLocaleString('en-US') +
       (net.peers != null ? ' · ' + net.peers + ' PEERS' : '');
   }
