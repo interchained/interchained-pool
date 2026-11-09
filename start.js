@@ -352,13 +352,26 @@ function createPools(config) {
     return pools;
 }
 
-/* Phase 2: group payouts. When the config's top-level "payments"
- * object has enabled:true, wire every pool (solo included, for stats)
- * into one shared JSON ledger and start the PSBT payments processor.
- * No-op otherwise -- phase-1 solo behaviour is untouched. */
+/* Phase 2: group payouts + the accounting ledger.
+ *
+ * RECORDING IS ALWAYS ON: every pool (solo included) is wired into
+ * one shared JSON ledger, because the ledger is the pool's accounting
+ * record -- attach.js documents shares/blocks being recorded "for
+ * accounting/stats for every scheme, solo included", and the fairness
+ * surface (/api/breakdowns, /api/reconcile) reads this store. The
+ * PSBT payments processor (the part that moves money) stays opt-in
+ * via payments.enabled.
+ *
+ * This split matters: recording used to be gated behind
+ * payments.enabled together with the processor, so a solo pool with
+ * payments disabled -- the shipped default in
+ * config/interchained-mainnet.json -- recorded NOTHING at all. Found
+ * blocks never reached the store and /api/breakdowns stayed []
+ * forever; the gap first became visible live with the Ethash block
+ * at height 914572 (2026-11-09), the pool's first found block, which
+ * the daemon accepted but the store never saw. */
 function setupPayments(config, pools) {
-    if (!config.payments || !config.payments.enabled) return null;
-    var payCfg = config.payments;
+    var payCfg = config.payments || {};
 
     var schemesMap = {};
     algoEntries(config).forEach(function (entry) {
@@ -376,6 +389,13 @@ function setupPayments(config, pools) {
     pools.forEach(function (pool) {
         payoutsAttach.attachPayouts(pool, pool.poolAlgo, ledger, { schemes: schemesMap });
     });
+
+    if (!payCfg.enabled) {
+        console.log('[payments] ledger recording attached to ' + pools.length +
+            ' pool(s) at ' + dataFile + ' (all schemes, solo included); ' +
+            'PSBT processor disabled (payments.enabled is false)');
+        return { ledger: ledger, processor: null, daemon: null };
+    }
 
     var daemon = new daemonModule.interface(daemonList(config), function (severity, message) {
         console.log('[payments] ' + severity + ': ' + message);
