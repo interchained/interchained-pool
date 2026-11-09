@@ -18,6 +18,7 @@ const { URL } = require('url');
 const StatsCollector = require('./collector');
 const payoutsBreakdown = require('../lib/payouts/breakdown');
 const payoutsReconcile = require('../lib/payouts/reconcile');
+const payoutsStorePath = require('../lib/payouts/storePath');
 const chatStoreModule = require('./chatStore');
 const vitalsStoreModule = require('./vitalsStore');
 
@@ -25,7 +26,9 @@ const ALGOS = ['sha256', 'yespower', 'ethash'];
 const STRATUM_PORTS = { sha256: 3333, yespower: 3334, ethash: 3335 };
 const DEFAULT_PORT = 8080;
 const DEFAULT_UI_DIR = path.join(__dirname, '..', 'ui');
-const DEFAULT_PAYOUTS_FILE = path.join(__dirname, 'data', 'payouts.json');
+/* The payouts store path itself is resolved by the single shared
+ * resolver (lib/payouts/storePath.js) — the same one the pool
+ * process writes through — in createServer below. */
 const WINDOW_SECONDS = 600;
 const SAT_PER_ITC = 1e8;
 
@@ -317,9 +320,16 @@ function storeBlocksPayload(store, limit) {
  *        is created when omitted)
  * @param {string} [options.uiDir] static root (default: ../ui)
  * @param {string|null} [options.dataFile] forwarded to a fresh collector
- * @param {string} [options.payoutsFile] payouts store path (phase 2);
- *        falls back to env ITC_PAYOUTS_FILE, then api/data/payouts.json.
- *        Read fresh on every phase-2 request; absence is tolerated.
+ * @param {string} [options.payoutsFile] payouts store path (phase 2).
+ *        Resolves through the shared lib/payouts/storePath.js —
+ *        explicit path, env ITC_PAYMENTS_DATA_FILE, the storeConfig's
+ *        payments.dataFile, legacy env ITC_PAYOUTS_FILE, then
+ *        api/data/payouts.json — the same file the pool process
+ *        writes. Read fresh on every phase-2 request; absence is
+ *        tolerated.
+ * @param {object} [options.storeConfig] parsed pool config, used only
+ *        for its payments.dataFile during path resolution (the
+ *        standalone entry supplies it from the config file).
  * @param {object} [options.poolConfig] pool config object
  *        ({address, algos:{algo:{stratumPort, scheme, pplnsWindow}},
  *          payments:{feePercent, minPayout, dryRun, confirmations}})
@@ -335,8 +345,11 @@ function createServer(options) {
   const collector =
     opts.collector || new StatsCollector({ dataFile: opts.dataFile });
   const uiDir = opts.uiDir || DEFAULT_UI_DIR;
-  const payoutsFile =
-    opts.payoutsFile || process.env.ITC_PAYOUTS_FILE || DEFAULT_PAYOUTS_FILE;
+  const payoutsFile = payoutsStorePath.resolvePayoutsStorePath({
+    explicit: opts.payoutsFile,
+    config: opts.storeConfig || null,
+    env: process.env,
+  });
   const poolConfig =
     opts.poolConfig && typeof opts.poolConfig === 'object' ? opts.poolConfig : null;
   const readStore = () => loadPayoutsStore(payoutsFile);
@@ -722,7 +735,21 @@ if (require.main === module) {
   // PORT remains as the legacy standalone override.
   const port = Number(process.env.ITC_API_PORT) || Number(process.env.PORT) || DEFAULT_PORT;
   const collector = new StatsCollector();
-  const server = createServer({ collector });
+  /* Reader coherence: resolve the payouts store from the SAME pool
+   * config the pool process loads (ITC_POOL_CONFIG or the default
+   * config path), so a payments.dataFile set there — not just the
+   * env knobs — points this standalone reader at the writer's file.
+   * A missing/unparseable config is fine: env + default still apply. */
+  let storeConfig = null;
+  try {
+    const cfgPath = process.env.ITC_POOL_CONFIG
+      ? path.resolve(process.env.ITC_POOL_CONFIG)
+      : path.join(__dirname, '..', 'config', 'interchained-mainnet.json');
+    storeConfig = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+  } catch (_) {
+    storeConfig = null;
+  }
+  const server = createServer({ collector, storeConfig });
   server.listen(port, () => {
     console.log(
       'ITC pool stats/API listening on port ' + port +

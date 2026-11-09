@@ -127,8 +127,12 @@ also works. `api/collector.js` exports the `StatsCollector` class directly
 
 ## Phase 2 — group payouts surfacing
 
-`createServer({ payoutsFile, poolConfig })`; `payoutsFile` falls back to
-env `ITC_PAYOUTS_FILE`, then `api/data/payouts.json`. The payouts store
+`createServer({ payoutsFile, poolConfig })`; the store path resolves
+through the shared `lib/payouts/storePath.js` (the same resolver the
+pool process writes through): explicit `payoutsFile`, env
+`ITC_PAYMENTS_DATA_FILE`, the pool config's `payments.dataFile` (the
+standalone entry reads the config file for this), legacy env
+`ITC_PAYOUTS_FILE`, then `api/data/payouts.json`. The payouts store
 (written by the payouts lane) is read fresh per request, read-only; a
 missing/corrupt file yields empty data, never an error.
 
