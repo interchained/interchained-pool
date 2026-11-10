@@ -337,6 +337,9 @@ function renderAlgoCards(algos) {
     var rows = el('div', 'algo-rows');
     rows.appendChild(algoRow('Miners', formatCount(s.workers)));
     rows.appendChild(algoRow('Shares', formatCount(s.sharesAccepted) + ' / ' + formatCount(s.sharesRejected) + ' rej'));
+    if (s.lastReject && s.lastReject.error) {
+        rows.appendChild(algoRow('Last reject', String(s.lastReject.error)));
+    }
     rows.appendChild(algoRow('Blocks found', formatCount(s.blocksFound)));
     var lb = s.lastBlock;
     rows.appendChild(algoRow('Last block', lb && lb.height != null ? '#' + formatCount(lb.height) + ' · ' + formatRelativeTime(lb.time) : '—'));
