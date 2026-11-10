@@ -105,6 +105,8 @@ class StatsCollector {
       workers: {},
       blocksFound: [],
       window: [],
+      lastReject: null,
+      rejectsByError: {},
     };
   }
 
@@ -163,6 +165,22 @@ class StatsCollector {
           difficulty,
           isBlock: !!isValidBlock,
         });
+
+        // Keep the most recent rejection reason (and a per-reason
+        // tally) on the lane state: a miner whose shares all bounce
+        // should be diagnosable from the dashboard/API, not only from
+        // the pool console's scrollback.
+        if (!valid && data.error) {
+          const st = this._ensureAlgo(algoKey).state;
+          st.lastReject = {
+            error: String(data.error),
+            worker: workerName,
+            time: Date.now(),
+          };
+          st.rejectsByError = st.rejectsByError || {};
+          const k = String(data.error);
+          st.rejectsByError[k] = (st.rejectsByError[k] || 0) + 1;
+        }
 
         if (valid && isValidBlock) {
           this.recordBlock(algoKey, {
@@ -300,6 +318,8 @@ class StatsCollector {
       workersDetail: workers,
       sharesAccepted: state.sharesAccepted,
       sharesRejected: state.sharesRejected,
+      lastReject: state.lastReject || null,
+      rejectsByError: state.rejectsByError || {},
       blocksFound: state.blocksFound.length,
       lastBlock:
         state.blocksFound.length > 0
