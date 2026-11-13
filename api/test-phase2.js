@@ -117,6 +117,23 @@ async function main() {
   check('config payments', cfg.payments.feePercent === 1.5 && cfg.payments.dryRun === true && cfg.payments.minPayoutItc === 1);
   check('config back-compat fields', cfg.coin === 'Interchained (ITC)' && cfg.stratumPorts.ethash === 3335 && Array.isArray(cfg.algoList) && cfg.solo === false);
 
+  // --- /api/config display ports: 5-digit backend ports (nginx stream
+  // proxy layout) list as their public ports; stock ports above pass
+  // through untouched (covered by the back-compat check).
+  const backendConfig = {
+    address: poolConfig.address,
+    algos: {
+      sha256: { stratumPort: 33333, scheme: 'solo' },
+      yespower: { stratumPort: 33343, scheme: 'solo' },
+      ethash: { stratumPort: 33353, scheme: 'solo' },
+    },
+  };
+  const server2 = createServer({ payoutsFile, poolConfig: backendConfig, dataFile: null });
+  await new Promise((r) => server2.listen(0, '127.0.0.1', r));
+  const cfg2 = json(await get(server2.address().port, '/api/config'));
+  check('config display ports slice the trailing 3', cfg2.stratumPorts.sha256 === 3333 && cfg2.stratumPorts.yespower === 3334 && cfg2.stratumPorts.ethash === 3335, JSON.stringify(cfg2.stratumPorts));
+  await new Promise((r) => server2.close(r));
+
   // --- UI served + new markup present
   const home = await get(port, '/');
   check('GET / 200', home.status === 200);
