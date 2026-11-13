@@ -24,6 +24,17 @@ const vitalsStoreModule = require('./vitalsStore');
 
 const ALGOS = ['sha256', 'yespower', 'ethash'];
 const STRATUM_PORTS = { sha256: 3333, yespower: 3334, ethash: 3335 };
+
+/* Display form of a stratum port. Behind the nginx stream proxy the
+ * pool binds backend ports made by appending a 3 to the public port
+ * (3333 -> 33333, 3334 -> 33343, 3335 -> 33353); listings show the
+ * public port miners connect to, so slice the trailing 3 back off a
+ * 5-digit backend port. Stock 4-digit ports pass through untouched.
+ * Display only: binding always uses the configured port as-is. */
+function displayPort(port) {
+  const s = String(port);
+  return s.length === 5 && s.endsWith('3') ? Number(s.slice(0, -1)) : port;
+}
 const DEFAULT_PORT = 8080;
 const DEFAULT_UI_DIR = path.join(__dirname, '..', 'ui');
 /* The payouts store path itself is resolved by the single shared
@@ -110,9 +121,9 @@ function algoConfig(poolConfig, algo) {
   const entry = a && typeof a === 'object' ? a : {};
   return {
     algo,
-    stratumPort: entry.stratumPort != null
+    stratumPort: displayPort(entry.stratumPort != null
       ? finiteOr(entry.stratumPort, STRATUM_PORTS[algo])
-      : STRATUM_PORTS[algo],
+      : STRATUM_PORTS[algo]),
     // No poolConfig -> phase-1 solo default, reported honestly as such.
     scheme: entry.scheme ? String(entry.scheme).toLowerCase() : 'solo',
     pplnsWindow: entry.pplnsWindow != null ? entry.pplnsWindow : null,
